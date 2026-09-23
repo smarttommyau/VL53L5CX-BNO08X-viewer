@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 
 # Package version (semantic versioning) - must match firmware
-VERSION = "0.1.0"
+VERSION = "0.1.0-ust"
 
 # Sensor resolution
 RESOLUTION = 8  # 8x8 zones

@@ -14,10 +14,10 @@
 
 #include <Wire.h>
 #include <SparkFun_VL53L5CX_Library.h>
-#include <SparkFun_BNO08x_Arduino_Library.h>
+// #include <SparkFun_BNO08x_Arduino_Library.h>
 
 // Version - must match viewer config.VERSION
-#define VERSION "0.1.0"
+#define VERSION "0.1.0-ust"
 
 // Pin definitions
 #define SDA_PIN 21
