@@ -20,23 +20,25 @@
 #define VERSION "0.1.0-ust"
 
 // Pin definitions
-#define SDA_PIN 21
-#define SCL_PIN 22
-#define LPN_PIN 19
+#define SDA_PIN 4
+#define SCL_PIN 5
+#define LPN_PIN 10
+// Modified to suit our layout
 
 // VL53L5CX ToF sensor instance
 SparkFun_VL53L5CX sensor;
 VL53L5CX_ResultsData measurementData;
 
 // BNO08X IMU instance
-BNO08x imu;
+// BNO08x imu;
 bool imuAvailable = false;
 
 // Current quaternion (wxyz format)
 float quatW = 1.0, quatX = 0.0, quatY = 0.0, quatZ = 0.0;
 
 // I2C speed - use 1MHz for fast data transfer
-#define I2C_SPEED 1000000
+#define I2C_SPEED 1000000 
+// #define I2C_SPEED 400000  // 400kHz is more stable for continuous streaming
 
 void setup() {
   Serial.begin(115200);
@@ -78,16 +80,16 @@ void setup() {
 
   // Initialize BNO08X IMU (shares I2C bus with VL53L5CX)
   // Try default address 0x4A first, then alternate 0x4B
-  if (imu.begin(0x4A, Wire)) {
-    imuAvailable = true;
-  } else if (imu.begin(0x4B, Wire)) {
-    imuAvailable = true;
-  }
+  // if (imu.begin(0x4A, Wire)) {
+  //   imuAvailable = true;
+  // } else if (imu.begin(0x4B, Wire)) {
+  //   imuAvailable = true;
+  // }
 
   if (imuAvailable) {
     // Enable game rotation vector at 10ms interval (100Hz)
     // Game rotation uses accel+gyro only (no magnetometer) - immune to magnetic interference
-    imu.enableGameRotationVector(10);
+    // imu.enableGameRotationVector(10);
     Serial.println("{\"status\":\"imu_ready\",\"mode\":\"game_rotation_vector\",\"frequency_hz\":100}");
   } else {
     Serial.println("{\"status\":\"imu_not_found\"}");
@@ -96,19 +98,19 @@ void setup() {
 
 void loop() {
   // Poll IMU for new orientation data (non-blocking)
-  if (imuAvailable && imu.wasReset()) {
-    // Re-enable game rotation vector if IMU was reset
-    imu.enableGameRotationVector(10);
-  }
+  // if (imuAvailable && imu.wasReset()) {
+  //   // Re-enable game rotation vector if IMU was reset
+  //   imu.enableGameRotationVector(10);
+  // }
 
-  if (imuAvailable && imu.getSensorEvent()) {
-    if (imu.getSensorEventID() == SENSOR_REPORTID_GAME_ROTATION_VECTOR) {
-      quatW = imu.getQuatReal();
-      quatX = imu.getQuatI();
-      quatY = imu.getQuatJ();
-      quatZ = imu.getQuatK();
-    }
-  }
+  // if (imuAvailable && imu.getSensorEvent()) {
+  //   if (imu.getSensorEventID() == SENSOR_REPORTID_GAME_ROTATION_VECTOR) {
+  //     quatW = imu.getQuatReal();
+  //     quatX = imu.getQuatI();
+  //     quatY = imu.getQuatJ();
+  //     quatZ = imu.getQuatK();
+  //   }
+  // }
 
   // Check if new ToF data is available
   if (sensor.isDataReady()) {
