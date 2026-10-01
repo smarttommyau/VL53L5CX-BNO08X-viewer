@@ -8,9 +8,6 @@ class VL53L5CXSensor {
     VL53L5CX_ResultsData measurementData;
     TwoWire *wirePort;
 
-    //quant
-    float quatW = 1.0, quatX = 0.0, quatY = 0.0, quatZ = 0.0;
-
     // pins
     int sdaPin;
     int sclPin;
@@ -65,13 +62,6 @@ class VL53L5CXSensor {
                     Serial.print(measurementData.target_status[i]);
                     if (i < 63) Serial.print(",");
                 }
-
-                // Add quaternion (wxyz format) with 6 decimal places for accuracy
-                Serial.print("],\"quat\":[");
-                Serial.print(quatW, 6); Serial.print(",");
-                Serial.print(quatX, 6); Serial.print(",");
-                Serial.print(quatY, 6); Serial.print(",");
-                Serial.print(quatZ, 6);
                 Serial.print("],\"v\":\"");
                 Serial.print(VERSION);
                 Serial.print("\",\"sda\":");
