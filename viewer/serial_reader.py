@@ -5,6 +5,7 @@ import logging
 import math
 import threading
 import time
+from typing import Optional
 
 import numpy as np
 import serial
@@ -26,6 +27,7 @@ class SerialReader:
         # Data storage
         self.distances = np.zeros(config.NUM_ZONES, dtype=np.float32)
         self.status = np.zeros(config.NUM_ZONES, dtype=np.uint8)
+        self._packets_queue: list[tuple[str, np.ndarray, np.ndarray, Optional[int]]] = []
         self._data_lock = threading.Lock()
 
         # FPS tracking
@@ -38,7 +40,7 @@ class SerialReader:
 
     @property
     def data_fps(self) -> float:
-        """Current data frame rate from sensor."""
+        """Current data frame rate from serial port."""
         with self._data_lock:
             return self._data_fps
 
@@ -48,7 +50,7 @@ class SerialReader:
         self.serial = serial.Serial(self.port, self.baud, timeout=1)
         time.sleep(2)  # Wait for ESP32 to initialize
         self.serial.reset_input_buffer()
-        logger.info("Serial connected")
+        logger.info("Serial connected on %s", self.port)
 
     def start(self):
         """Start the reader thread."""
@@ -63,7 +65,10 @@ class SerialReader:
         """Stop the reader thread and close serial."""
         self.running = False
         if self.serial:
-            self.serial.close()
+            try:
+                self.serial.close()
+            except Exception:
+                pass
         if self._thread:
             self._thread.join(timeout=1)
             self._thread = None
@@ -76,6 +81,19 @@ class SerialReader:
         """
         with self._data_lock:
             return self.distances.copy(), self.status.copy()
+
+    def get_pending_packets(
+        self,
+    ) -> list[tuple[str, np.ndarray, np.ndarray, Optional[int]]]:
+        """Get all pending packets received since last call.
+
+        Returns:
+            List of (port, distances_array, status_array, sda_pin)
+        """
+        with self._data_lock:
+            packets = self._packets_queue[:]
+            self._packets_queue.clear()
+            return packets
 
     def _validate_distances(self, distances: list) -> bool:
         """Validate distance values are within expected range."""
@@ -101,15 +119,15 @@ class SerialReader:
             self.serial = serial.Serial(self.port, self.baud, timeout=1)
             time.sleep(2)  # Wait for ESP32/sensor to initialize
             self.serial.reset_input_buffer()
-            logger.info("Serial reconnected")
+            logger.info("Serial reconnected on %s", self.port)
             return True
         except (serial.SerialException, OSError) as e:
-            logger.debug("Reconnection failed: %s", e)
+            logger.debug("Reconnection failed on %s: %s", self.port, e)
             return False
 
     def _read_loop(self):
         """Background thread to read serial data."""
-        logger.info("Serial reader thread started")
+        logger.info("Serial reader thread started for %s", self.port)
         while self.running:
             try:
                 if self.serial and self.serial.is_open:
@@ -122,35 +140,60 @@ class SerialReader:
                                 if "distances" in data and "status" in data:
                                     distances = data["distances"]
                                     status = data["status"]
+                                    sda = data.get("sda")
+
+                                    # Skip if status/distances are not list objects (e.g. info JSON packets)
+                                    if not isinstance(distances, list) or not isinstance(status, list):
+                                        logger.debug("Received non-measurement JSON packet: %s", data)
+                                        continue
+
                                     # Validate array lengths to handle corrupted serial data
-                                    if len(distances) != config.NUM_ZONES or len(status) != config.NUM_ZONES:
+                                    if (
+                                        len(distances) != config.NUM_ZONES
+                                        or len(status) != config.NUM_ZONES
+                                    ):
                                         logger.warning(
                                             "Invalid array lengths: distances=%d, status=%d (expected %d)",
-                                            len(distances), len(status), config.NUM_ZONES
+                                            len(distances),
+                                            len(status),
+                                            config.NUM_ZONES,
                                         )
                                         continue
+
                                     # Validate distance values
                                     if not self._validate_distances(distances):
-                                        logger.warning("Invalid distance values detected (NaN/Inf)")
+                                        logger.warning(
+                                            "Invalid distance values detected (NaN/Inf)"
+                                        )
                                         continue
+
                                     # Check version (warn once)
                                     if not self._version_checked:
                                         self._version_checked = True
                                         firmware_version = data.get("v")
                                         if firmware_version is None:
                                             logger.warning(
-                                                "No version in data. "
-                                                "Firmware may be outdated - consider reflashing."
+                                                "No version in data. Firmware may be outdated."
                                             )
                                         elif firmware_version != config.VERSION:
                                             logger.warning(
-                                                "Version mismatch: firmware=%s, viewer=%s. "
-                                                "Consider reflashing the ESP32.",
-                                                firmware_version, config.VERSION
+                                                "Version mismatch: firmware=%s, viewer=%s.",
+                                                firmware_version,
+                                                config.VERSION,
                                             )
+
+                                    distances_arr = np.array(
+                                        distances, dtype=np.float32
+                                    )
+                                    status_arr = np.array(status, dtype=np.uint8)
+
                                     with self._data_lock:
-                                        self.distances = np.array(distances, dtype=np.float32)
-                                        self.status = np.array(status, dtype=np.uint8)
+                                        self.distances = distances_arr
+                                        self.status = status_arr
+                                        self._packets_queue.append(
+                                            (self.port, distances_arr, status_arr, sda)
+                                        )
+
                                     # Track data FPS
                                     self._frame_count += 1
                                     now = time.time()
@@ -165,7 +208,7 @@ class SerialReader:
             except (serial.SerialException, OSError) as e:
                 if not self.running:
                     break
-                logger.warning("Serial connection lost: %s", e)
+                logger.warning("Serial connection lost on %s: %s", self.port, e)
                 with self._data_lock:
                     self._data_fps = 0.0  # Reset FPS indicator
                 while self.running:

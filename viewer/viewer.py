@@ -5,6 +5,8 @@ import argparse
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
+import sys
 import time
 
 import numpy as np
@@ -12,7 +14,7 @@ import viser
 from scipy.spatial.transform import Rotation
 
 from . import config
-from .filters import TemporalFilter, fit_plane, fit_plane_ransac
+from .filters import fit_plane, fit_plane_ransac
 from .geometry import (
     CoordinateMethod,
     compute_zone_angles,
@@ -20,8 +22,15 @@ from .geometry import (
     get_colors,
 )
 from .logging_config import setup_logging
-from .scene import create_grid, create_scene_hierarchy, update_zone_rays
+from .scene import (
+    _create_board_mesh,
+    _yaw_to_wxyz,
+    create_grid,
+    update_sensor_rays,
+)
+from .sensor_manager import SensorManager
 from .serial_reader import SerialReader
+from .vl53l5cx_sensor import VL53L5CXSensor
 
 logger = logging.getLogger("vl53l5cx_viewer.main")
 
@@ -82,43 +91,161 @@ def voxel_downsample(
     if len(points) == 0:
         return points, colors
     voxel_indices = np.ascontiguousarray(np.floor(points / voxel_size).astype(np.int64))
-    keys = voxel_indices.view(dtype=[("x", np.int64), ("y", np.int64), ("z", np.int64)]).ravel()
+    keys = voxel_indices.view(
+        dtype=[("x", np.int64), ("y", np.int64), ("z", np.int64)]
+    ).ravel()
     _, unique_idx = np.unique(keys, return_index=True)
     return points[unique_idx], colors[unique_idx]
 
 
 class VL53L5CXViewer:
-    """Real-time point cloud viewer for VL53L5CX ToF sensor."""
+    """Real-time point cloud viewer for VL53L5CX ToF sensors."""
 
-    def __init__(self, port: str, baud: int = 115200):
-        self.serial_reader = SerialReader(port, baud)
+    def __init__(self, devices_config: dict[int, dict], baud: int = 115200):
+        self.baud = baud
+        self.devices_config = devices_config
+        self.sensor_manager = SensorManager()
+        self.serial_readers: dict[str, SerialReader] = {}
+
         self.zone_angles = compute_zone_angles()
-        self.temporal_filter = TemporalFilter()
 
-        # Compute board position
-        self.tof_board_center = (
-            np.array(config.TOF_BOARD.world_position)
-            - np.array(config.TOF_BOARD.sensor_offset)
+        # Initialize devices and pre-allocate expected sensors
+        for idx, dev in sorted(devices_config.items()):
+            port = dev["port"]
+            device_type = dev.get("device", "port")
+            sensor_count = dev["sensor_count"]
+            self.sensor_manager.add_device(
+                deviceName=port, sensor_count=sensor_count, deviceType=device_type
+            )
+            if port not in self.serial_readers:
+                self.serial_readers[port] = SerialReader(port, baud)
+
+        # Legacy backward compatibility property
+        first_port = list(self.serial_readers.keys())[0] if self.serial_readers else "/dev/null"
+        self.serial_reader = self.serial_readers.get(first_port)
+
+    def _initialize_sensor_viser(
+        self,
+        server: viser.ViserServer,
+        sensor: VL53L5CXSensor,
+        index: int,
+        total_count: int,
+    ):
+        """Initialize Viser 3D scene elements and GUI sidebar folder for a sensor."""
+        spacing = getattr(config, "SENSOR_SPACING_M", 0.08)
+        x_offset = (index - (total_count - 1) / 2.0) * spacing
+        sensor_pos = (x_offset, 0.0, 0.0)
+
+        # 3D Sensor frame
+        sensor.frame_handle = server.scene.add_frame(
+            sensor.hierarchy_path,
+            show_axes=True,
+            axes_length=0.01,
+            axes_radius=0.001,
+            position=sensor_pos,
+            wxyz=_yaw_to_wxyz(config.TOF_BOARD.sensor_yaw_deg),
         )
+
+        # Board mesh under sensor frame
+        assets_dir = Path(__file__).parent.parent / "assets"
+        sensor.mesh_handle = _create_board_mesh(
+            server,
+            scene_path=f"{sensor.hierarchy_path}/mesh",
+            board_config=config.TOF_BOARD,
+            assets_dir=assets_dir,
+        )
+
+        # 3D Label above sensor
+        sda_str = str(sensor.sda) if sensor.sda is not None else "Pending..."
+        label_text = (
+            f"Sensor {sensor.id}\nDevice: {sensor.deviceName}\nSDA: {sda_str}"
+        )
+        sensor.label_handle = server.scene.add_label(
+            f"{sensor.hierarchy_path}/label",
+            text=label_text,
+            position=(0.0, -0.015, 0.025),
+        )
+
+        # Initial zone rays
+        coord_method = CoordinateMethod.UNIFORM
+        if hasattr(self, "coord_method_dropdown"):
+            coord_method = next(
+                m
+                for m in CoordinateMethod
+                if m.value == self.coord_method_dropdown.value
+            )
+
+        show_rays = (
+            self.show_rays_checkbox.value
+            if hasattr(self, "show_rays_checkbox")
+            else True
+        )
+        sensor.rays_handles = update_sensor_rays(
+            server,
+            sensor.hierarchy_path,
+            self.zone_angles,
+            coord_method,
+            visible=show_rays,
+        )
+
+        # Sidebar GUI folder (if dynamically created)
+        if sensor.gui_folder is None:
+            sda_str = str(sensor.sda) if sensor.sda is not None else "Pending..."
+            with server.gui.add_folder("Sensors Info"):
+                with server.gui.add_folder(f"Sensor {sensor.id}") as folder:
+                    sensor.gui_folder = folder
+                    sensor.gui_device_text = server.gui.add_text(
+                        "DeviceName", initial_value=sensor.deviceName, disabled=True
+                    )
+                    sensor.gui_sda_text = server.gui.add_text(
+                        "SDA", initial_value=sda_str, disabled=True
+                    )
+                    sensor.gui_status_text = server.gui.add_text(
+                        "Status", initial_value="Waiting...", disabled=True
+                    )
+                    sensor.gui_freq_text = server.gui.add_text(
+                        "Frequency (Hz)", initial_value="0.0", disabled=True
+                    )
 
     def _setup_scene(self, server: viser.ViserServer):
         """Initialize the 3D scene."""
         server.scene.add_frame("/origin", axes_length=0.002, axes_radius=0.0001)
         create_grid(server)
-        assets_dir = Path(__file__).parent.parent / "assets"
-        self.scene = create_scene_hierarchy(server, assets_dir, self.zone_angles)
+
+        sensors = self.sensor_manager.get_all_sensors()
+        total_count = len(sensors)
+        for i, sensor in enumerate(sensors):
+            self._initialize_sensor_viser(server, sensor, i, total_count)
 
     def _setup_gui(self, server: viser.ViserServer, mapping_state: MappingState):
         """Initialize GUI controls."""
-        with server.gui.add_folder("Sensor Info"):
-            self.distance_text = server.gui.add_text("Status", initial_value="Waiting...")
-            self.freq_text = server.gui.add_text("Frequency (Hz)", initial_value="0")
+        with server.gui.add_folder("Sensors Info"):
+            # Create GUI subfolders for all pre-allocated sensors
+            sensors = self.sensor_manager.get_all_sensors()
+            for sensor in sensors:
+                sda_str = str(sensor.sda) if sensor.sda is not None else "Pending..."
+                with server.gui.add_folder(f"Sensor {sensor.id}") as folder:
+                    sensor.gui_folder = folder
+                    sensor.gui_device_text = server.gui.add_text(
+                        "DeviceName", initial_value=sensor.deviceName, disabled=True
+                    )
+                    sensor.gui_sda_text = server.gui.add_text(
+                        "SDA", initial_value=sda_str, disabled=True
+                    )
+                    sensor.gui_status_text = server.gui.add_text(
+                        "Status", initial_value="Waiting...", disabled=True
+                    )
+                    sensor.gui_freq_text = server.gui.add_text(
+                        "Frequency (Hz)", initial_value="0.0", disabled=True
+                    )
 
         with server.gui.add_folder("Settings"):
             self.point_size_slider = server.gui.add_slider(
                 "Point Size", min=0.001, max=0.020, step=0.001, initial_value=0.005
             )
-            self.show_rays_checkbox = server.gui.add_checkbox("Show Zone Rays", initial_value=True)
+            self.show_rays_checkbox = server.gui.add_checkbox(
+                "Show Zone Rays", initial_value=True
+            )
             self.clip_rays_checkbox = server.gui.add_checkbox(
                 "Clip to Measurement", initial_value=False
             )
@@ -130,13 +257,19 @@ class VL53L5CXViewer:
             @self.clip_rays_checkbox.on_update
             def _on_clip_rays_toggle(event: viser.GuiEvent) -> None:
                 if not self.clip_rays_checkbox.value:
-                    # Recreate full-length rays when clip mode is disabled
                     method = next(
-                        m for m in CoordinateMethod if m.value == self.coord_method_dropdown.value
+                        m
+                        for m in CoordinateMethod
+                        if m.value == self.coord_method_dropdown.value
                     )
-                    self.scene.zone_rays = update_zone_rays(
-                        server, self.zone_angles, method, visible=self.show_rays_checkbox.value
-                    )
+                    for sensor in self.sensor_manager.get_all_sensors():
+                        sensor.rays_handles = update_sensor_rays(
+                            server,
+                            sensor.hierarchy_path,
+                            self.zone_angles,
+                            method,
+                            visible=self.show_rays_checkbox.value,
+                        )
 
             server.gui.add_markdown("---")
             self.coord_method_dropdown = server.gui.add_dropdown(
@@ -148,27 +281,43 @@ class VL53L5CXViewer:
             @self.coord_method_dropdown.on_update
             def _on_coord_method_change(event: viser.GuiEvent) -> None:
                 method = next(
-                    m for m in CoordinateMethod if m.value == self.coord_method_dropdown.value
+                    m
+                    for m in CoordinateMethod
+                    if m.value == self.coord_method_dropdown.value
                 )
-                # Update rays and replace stale handles
-                self.scene.zone_rays = update_zone_rays(
-                    server, self.zone_angles, method, visible=self.show_rays_checkbox.value
-                )
+                for sensor in self.sensor_manager.get_all_sensors():
+                    sensor.rays_handles = update_sensor_rays(
+                        server,
+                        sensor.hierarchy_path,
+                        self.zone_angles,
+                        method,
+                        visible=self.show_rays_checkbox.value,
+                    )
 
             server.gui.add_markdown("---")
-            self.filter_checkbox = server.gui.add_checkbox("Enable Filtering", initial_value=False)
+            self.filter_checkbox = server.gui.add_checkbox(
+                "Enable Filtering", initial_value=False
+            )
             self.filter_strength_slider = server.gui.add_slider(
-                "Filter Strength", min=0.0, max=1.0, step=0.05, initial_value=0.5, disabled=True
+                "Filter Strength",
+                min=0.0,
+                max=1.0,
+                step=0.05,
+                initial_value=0.5,
+                disabled=True,
             )
 
             @self.filter_checkbox.on_update
             def _on_filter_toggle(event: viser.GuiEvent) -> None:
                 self.filter_strength_slider.disabled = not self.filter_checkbox.value
                 if not self.filter_checkbox.value:
-                    self.temporal_filter.reset()
+                    for sensor in self.sensor_manager.get_all_sensors():
+                        sensor.temporal_filter.reset()
 
             server.gui.add_markdown("---")
-            self.fit_plane_checkbox = server.gui.add_checkbox("Fit Plane", initial_value=False)
+            self.fit_plane_checkbox = server.gui.add_checkbox(
+                "Fit Plane", initial_value=False
+            )
             self.plane_method_dropdown = server.gui.add_dropdown(
                 "Method",
                 options=["Least Squares", "RANSAC"],
@@ -176,7 +325,12 @@ class VL53L5CXViewer:
                 disabled=True,
             )
             self.ransac_threshold_slider = server.gui.add_slider(
-                "RANSAC Threshold (mm)", min=1, max=50, step=1, initial_value=10, visible=False
+                "RANSAC Threshold (mm)",
+                min=1,
+                max=50,
+                step=1,
+                initial_value=10,
+                visible=False,
             )
             self.plane_error_text = server.gui.add_text(
                 "Plane RMSE (mm)", initial_value="--"
@@ -199,7 +353,9 @@ class VL53L5CXViewer:
                 )
 
         with server.gui.add_folder("Mapping"):
-            self.mapping_checkbox = server.gui.add_checkbox("Mapping Mode", initial_value=False)
+            self.mapping_checkbox = server.gui.add_checkbox(
+                "Mapping Mode", initial_value=False
+            )
             self.voxel_size_slider = server.gui.add_slider(
                 "Voxel Size (mm)", min=5, max=50, step=5, initial_value=10
             )
@@ -216,145 +372,158 @@ class VL53L5CXViewer:
             @self.mapping_checkbox.on_update
             def _on_mapping_toggle(event: viser.GuiEvent) -> None:
                 if self.mapping_checkbox.value:
-                    # Entering mapping mode: remove live points
-                    server.scene.remove_by_name("/breadboard/tof/sensor/points")
+                    for sensor in self.sensor_manager.get_all_sensors():
+                        server.scene.remove_by_name(f"{sensor.hierarchy_path}/points")
                 else:
-                    # Exiting mapping mode: clear accumulated map
                     mapping_state.request_clear()
 
     def _process_frame(
-        self, server: viser.ViserServer, mapping_state: MappingState, plane_handle
+        self, server: viser.ViserServer, mapping_state: MappingState
     ):
-        """Process a single frame of sensor data."""
-        distances, status = self.serial_reader.get_data()
-
-        if self.filter_checkbox.value:
-            distances = self.temporal_filter.apply(distances, self.filter_strength_slider.value)
-
-        # Handle clear request atomically in main loop (must be outside sensor data check)
+        """Process incoming frame data from all connected sensors."""
+        # Process pending clear request in mapping mode
         if mapping_state.process_clear_if_requested():
             self.point_count_text.value = "0"
             server.scene.remove_by_name("/map/points")
 
-        # Check if we have any distance data from sensor
-        has_any_data = np.any(distances > 0)
+        coord_method = next(
+            m
+            for m in CoordinateMethod
+            if m.value == self.coord_method_dropdown.value
+        )
 
-        if has_any_data:
-            # Get selected coordinate method
-            coord_method = next(
-                m for m in CoordinateMethod if m.value == self.coord_method_dropdown.value
-            )
+        # Collect pending packets from all serial readers
+        for port, reader in self.serial_readers.items():
+            packets = reader.get_pending_packets()
+            for dev_name, distances, status, sda in packets:
+                sensor, newly_assigned = self.sensor_manager.process_packet(
+                    dev_name, distances, status, sda
+                )
 
-            # Points in sensor-local coordinates (z forward from sensor)
-            points_local = distances_to_points(distances, self.zone_angles, coord_method)
-            colors = get_colors(distances, status)
-            valid_mask = (status == 5) & (distances >= config.MIN_RANGE_MM)
-
-            if np.any(valid_mask):
-                valid_local = points_local[valid_mask].astype(np.float32)
-                valid_colors = colors[valid_mask]
-
-                # For mapping mode, we need points in world coordinates
-                if self.mapping_checkbox.value:
-                    # Apply sensor yaw + offset
-                    sensor_yaw = Rotation.from_euler(
-                        "z", config.TOF_BOARD.sensor_yaw_deg, degrees=True
+                if sensor.frame_handle is None:
+                    all_sensors = self.sensor_manager.get_all_sensors()
+                    idx = (
+                        all_sensors.index(sensor)
+                        if sensor in all_sensors
+                        else len(all_sensors) - 1
                     )
-                    valid_world = (
-                        sensor_yaw.apply(valid_local)
-                        + np.array(config.TOF_BOARD.world_position)
+                    self._initialize_sensor_viser(
+                        server, sensor, idx, len(all_sensors)
                     )
 
-                    mapping_state.add(valid_world, valid_colors)
-
-                    if (
-                        mapping_state.total_points() > config.DOWNSAMPLE_POINT_THRESHOLD
-                        or len(mapping_state.accumulated_points)
-                        > config.DOWNSAMPLE_BUFFER_THRESHOLD
-                    ):
-                        voxel_size_m = self.voxel_size_slider.value / 1000.0
-                        max_pts = self.max_points_slider.value * 1000
-                        mapping_state.downsample(voxel_size_m, max_pts)
-
-                    display_points, display_colors = mapping_state.get_display_data()
-                    self.point_count_text.value = f"{len(display_points):,}"
-
-                    # Mapping points in world space
-                    server.scene.add_point_cloud(
-                        "/map/points",
-                        points=display_points,
-                        colors=display_colors,
-                        point_size=self.point_size_slider.value,
-                        point_shape="circle",
-                    )
-                else:
-                    # Live points in sensor-local coordinates (frame handles transform)
-                    server.scene.add_point_cloud(
-                        "/breadboard/tof/sensor/points",
-                        points=valid_local,
-                        colors=valid_colors,
-                        point_size=self.point_size_slider.value,
-                        point_shape="circle",
+                if self.filter_checkbox.value:
+                    distances = sensor.temporal_filter.apply(
+                        distances, self.filter_strength_slider.value
                     )
 
-                # Plane fitting (in sensor-local for consistency with live view)
-                if self.fit_plane_checkbox.value and len(valid_local) >= 3:
-                    if self.plane_method_dropdown.value == "RANSAC":
-                        threshold_m = self.ransac_threshold_slider.value / 1000.0
-                        plane_fit = fit_plane_ransac(valid_local, threshold=threshold_m)
+                # Convert sensor measurements to local points
+                points_local, colors = sensor.get_display_data(
+                    self.zone_angles, coord_method
+                )
+
+                if len(points_local) > 0:
+                    if self.mapping_checkbox.value:
+                        # Transform local points to world space
+                        spacing = getattr(config, "SENSOR_SPACING_M", 0.08)
+                        all_sensors = self.sensor_manager.get_all_sensors()
+                        idx = (
+                            all_sensors.index(sensor)
+                            if sensor in all_sensors
+                            else 0
+                        )
+                        x_offset = (idx - (len(all_sensors) - 1) / 2.0) * spacing
+
+                        sensor_yaw = Rotation.from_euler(
+                            "z", config.TOF_BOARD.sensor_yaw_deg, degrees=True
+                        )
+                        world_points = (
+                            sensor_yaw.apply(points_local)
+                            + np.array(config.TOF_BOARD.world_position)
+                            + np.array([x_offset, 0.0, 0.0])
+                        )
+                        mapping_state.add(world_points, colors)
+
+                        if (
+                            mapping_state.total_points()
+                            > config.DOWNSAMPLE_POINT_THRESHOLD
+                            or len(mapping_state.accumulated_points)
+                            > config.DOWNSAMPLE_BUFFER_THRESHOLD
+                        ):
+                            voxel_size_m = self.voxel_size_slider.value / 1000.0
+                            max_pts = self.max_points_slider.value * 1000
+                            mapping_state.downsample(voxel_size_m, max_pts)
+
+                        display_points, display_colors = (
+                            mapping_state.get_display_data()
+                        )
+                        self.point_count_text.value = f"{len(display_points):,}"
+
+                        server.scene.add_point_cloud(
+                            "/map/points",
+                            points=display_points,
+                            colors=display_colors,
+                            point_size=self.point_size_slider.value,
+                            point_shape="circle",
+                        )
                     else:
-                        plane_fit = fit_plane(valid_local)
-
-                    if plane_fit is not None:
-                        pos, wxyz, size, rmse_mm = plane_fit
-                        self.plane_error_text.value = f"{rmse_mm:.2f}"
-                        plane_handle = server.scene.add_box(
-                            "/breadboard/tof/sensor/plane",
-                            dimensions=(size, size, 0.0001),
-                            position=pos,
-                            wxyz=wxyz,
-                            color=(255, 255, 0),
-                            opacity=0.5,
+                        # Add or update live point cloud for this sensor
+                        server.scene.add_point_cloud(
+                            f"{sensor.hierarchy_path}/points",
+                            points=points_local,
+                            colors=colors,
+                            point_size=self.point_size_slider.value,
+                            point_shape="circle",
                         )
 
-                valid_distances = distances[valid_mask]
-                self.distance_text.value = (
-                    f"Range: {valid_distances.min():.0f}-{valid_distances.max():.0f}mm"
-                )
-            else:
-                self.distance_text.value = "No valid data"
-        else:
-            # No distance data received from sensor - update status text
-            if self.serial_reader.data_fps == 0.0:
-                self.distance_text.value = "Waiting for data..."
-            else:
-                self.distance_text.value = "No data received"
+                    # Plane fitting per sensor
+                    if self.fit_plane_checkbox.value and len(points_local) >= 3:
+                        if self.plane_method_dropdown.value == "RANSAC":
+                            threshold_m = (
+                                self.ransac_threshold_slider.value / 1000.0
+                            )
+                            plane_fit = fit_plane_ransac(
+                                points_local, threshold=threshold_m
+                            )
+                        else:
+                            plane_fit = fit_plane(points_local)
 
-        if plane_handle is not None:
-            plane_handle.visible = self.fit_plane_checkbox.value
+                        if plane_fit is not None:
+                            pos, wxyz, size, rmse_mm = plane_fit
+                            self.plane_error_text.value = f"{rmse_mm:.2f}"
+                            server.scene.add_box(
+                                f"{sensor.hierarchy_path}/plane",
+                                dimensions=(size, size, 0.0001),
+                                position=pos,
+                                wxyz=wxyz,
+                                color=(255, 255, 0),
+                                opacity=0.5,
+                            )
 
-        self.freq_text.value = f"{self.serial_reader.data_fps:.1f}"
+                # Update zone rays for sensor
+                if self.show_rays_checkbox.value and self.clip_rays_checkbox.value:
+                    sensor.rays_handles = update_sensor_rays(
+                        server,
+                        sensor.hierarchy_path,
+                        self.zone_angles,
+                        coord_method,
+                        visible=True,
+                        distances=distances,
+                    )
+                else:
+                    for ray in sensor.rays_handles:
+                        ray.visible = self.show_rays_checkbox.value
 
-        # Update zone rays visibility and clipping
-        if self.show_rays_checkbox.value and self.clip_rays_checkbox.value:
-            # Recreate rays clipped to measured distances
-            coord_method = next(
-                m for m in CoordinateMethod if m.value == self.coord_method_dropdown.value
-            )
-            self.scene.zone_rays = update_zone_rays(
-                server, self.zone_angles, coord_method,
-                visible=True, distances=distances
-            )
-        else:
-            for ray in self.scene.zone_rays:
-                ray.visible = self.show_rays_checkbox.value
-
-        return plane_handle
+                # Update GUI text fields and 3D scene label for this sensor
+                sensor.update_gui_and_label()
 
     def run(self, host: str = "0.0.0.0", port: int = 8080):
         """Start the viewer."""
-        self.serial_reader.connect()
-        self.serial_reader.start()
+        for reader in self.serial_readers.values():
+            try:
+                reader.connect()
+                reader.start()
+            except Exception as e:
+                logger.error("Failed to connect to %s: %s", reader.port, e)
 
         server = viser.ViserServer(host=host, port=port)
         logger.info("Viser server started at http://localhost:%d", port)
@@ -371,12 +540,10 @@ class VL53L5CXViewer:
         self._setup_scene(server)
         self._setup_gui(server, mapping_state)
 
-        plane_handle = None
-
         try:
             while True:
                 frame_start = time.time()
-                plane_handle = self._process_frame(server, mapping_state, plane_handle)
+                self._process_frame(server, mapping_state)
 
                 elapsed = time.time() - frame_start
                 if elapsed < config.FRAME_TIME:
@@ -385,17 +552,40 @@ class VL53L5CXViewer:
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:
-            self.serial_reader.stop()
+            for reader in self.serial_readers.values():
+                reader.stop()
 
 
-def main():
+def parse_args():
+    """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="VL53L5CX Point Cloud Viewer")
+
+    parser.add_argument(
+        "--device1",
+        dest="device1",
+        default="port",
+        help="Device type/name for device 1 (default: port)",
+    )
+    parser.add_argument(
+        "--port1",
+        dest="port1",
+        default=None,
+        help="Serial port for device 1 (e.g. /dev/cu.usbserial-0001)",
+    )
     parser.add_argument(
         "--port",
         "-p",
+        dest="port_alias",
         default="/dev/cu.usbserial-0001",
-        help="Serial port (default: /dev/cu.usbserial-0001)",
+        help="Serial port alias for device 1",
     )
+    parser.add_argument(
+        "--sensor-count1",
+        type=int,
+        default=1,
+        help="Number of VL53 sensors on device 1 (default: 1)",
+    )
+
     parser.add_argument(
         "--baud", "-b", type=int, default=115200, help="Baud rate (default: 115200)"
     )
@@ -408,12 +598,69 @@ def main():
     parser.add_argument(
         "--debug", "-d", action="store_true", help="Enable debug logging"
     )
-    args = parser.parse_args()
 
-    import logging
+    args, unknown = parser.parse_known_args()
+
+    dev1_port = args.port1 if args.port1 is not None else args.port_alias
+
+    devices_config: dict[int, dict] = {
+        1: {
+            "device": args.device1,
+            "port": dev1_port,
+            "sensor_count": args.sensor_count1,
+        }
+    }
+
+    # Dynamically scan for any extra --deviceX, --portX, --sensor-countX flags
+    for arg in unknown:
+        m_dev = re.match(r"--device(\d+)=(.*)", arg)
+        if m_dev:
+            idx = int(m_dev.group(1))
+            val = m_dev.group(2)
+            if idx not in devices_config:
+                devices_config[idx] = {
+                    "device": val,
+                    "port": "/dev/cu.usbserial-0001",
+                    "sensor_count": 1,
+                }
+            else:
+                devices_config[idx]["device"] = val
+
+        m_port = re.match(r"--port(\d+)=(.*)", arg)
+        if m_port:
+            idx = int(m_port.group(1))
+            val = m_port.group(2)
+            if idx not in devices_config:
+                devices_config[idx] = {
+                    "device": "port",
+                    "port": val,
+                    "sensor_count": 1,
+                }
+            else:
+                devices_config[idx]["port"] = val
+
+        m_cnt = re.match(r"--sensor-count(\d+)=(\d+)", arg)
+        if m_cnt:
+            idx = int(m_cnt.group(1))
+            cnt = int(m_cnt.group(2))
+            if idx not in devices_config:
+                devices_config[idx] = {
+                    "device": "port",
+                    "port": "/dev/cu.usbserial-0001",
+                    "sensor_count": cnt,
+                }
+            else:
+                devices_config[idx]["sensor_count"] = cnt
+
+    return args, devices_config
+
+
+def main():
+    args, devices_config = parse_args()
+
     setup_logging(level=logging.DEBUG if args.debug else logging.INFO)
 
-    viewer = VL53L5CXViewer(port=args.port, baud=args.baud)
+    viewer = VL53L5CXViewer(devices_config=devices_config, baud=args.baud)
     viewer.run(host=args.host, port=args.viser_port)
 
 
