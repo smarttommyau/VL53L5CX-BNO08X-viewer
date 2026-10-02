@@ -84,7 +84,7 @@ class TestFitPlane:
         result = fit_plane(points)
 
         assert result is not None
-        pos, wxyz, size = result
+        pos, wxyz, size, rmse_mm = result
         # Position should be at centroid z
         assert abs(pos[2] - 0.5) < 0.01
         # Orientation should be identity (horizontal plane)
@@ -137,7 +137,7 @@ class TestFitPlaneRansac:
         result = fit_plane_ransac(points, threshold=0.1)
 
         assert result is not None
-        pos, wxyz, size = result
+        pos, wxyz, size, rmse_mm = result
         # Should fit to inliers, ignoring outlier
         assert abs(pos[2] - 0.5) < 0.2
 

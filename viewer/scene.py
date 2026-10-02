@@ -257,3 +257,71 @@ def update_zone_rays(
         new_rays.append(ray)
 
     return new_rays
+
+
+def update_sensor_rays(
+    server: viser.ViserServer,
+    parent_path: str,
+    zone_angles: ZoneAngles,
+    method: CoordinateMethod,
+    visible: bool = True,
+    distances: np.ndarray | None = None,
+) -> list:
+    """Update zone ray positions for a specific sensor hierarchy path.
+
+    Args:
+        server: Viser server instance.
+        parent_path: Base hierarchy path for the sensor (e.g. "/sensor_1").
+        zone_angles: Pre-computed zone angle data.
+        method: Coordinate transform method.
+        visible: Whether rays should be visible.
+        distances: Optional per-zone distances in mm.
+
+    Returns the new ray handles.
+    """
+    min_range = config.MIN_RANGE_MM / 1000
+    max_range = config.MAX_RANGE_MM / 1000
+
+    new_rays = []
+    for i in range(config.NUM_ZONES):
+        if method == CoordinateMethod.UNIFORM:
+            dir_x = zone_angles.tan_x[i]
+            dir_y = zone_angles.tan_y[i]
+            dir_z = 1.0
+        else:
+            dir_x = zone_angles.st_ray_dir_x[i]
+            dir_y = zone_angles.st_ray_dir_y[i]
+            dir_z = zone_angles.st_ray_dir_z[i]
+            if dir_z > 0:
+                dir_x = dir_x / dir_z
+                dir_y = dir_y / dir_z
+                dir_z = 1.0
+
+        if distances is not None and distances[i] >= config.MIN_RANGE_MM:
+            end_range = distances[i] / 1000
+        else:
+            end_range = max_range
+
+        start = np.array([
+            min_range * dir_x,
+            min_range * dir_y,
+            min_range * dir_z,
+        ], dtype=np.float32)
+        end = np.array([
+            end_range * dir_x,
+            end_range * dir_y,
+            end_range * dir_z,
+        ], dtype=np.float32)
+
+        ray_path = f"{parent_path}/rays/ray_{i}"
+        ray = server.scene.add_spline_catmull_rom(
+            ray_path,
+            positions=np.array([start, end], dtype=np.float32),
+            color=(100, 150, 255),
+            line_width=1.0,
+            visible=visible,
+        )
+        new_rays.append(ray)
+
+    return new_rays
+

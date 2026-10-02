@@ -54,6 +54,7 @@ TOF_BOARD = BoardConfig(
 # Visualization settings
 TARGET_FPS = 30  # Target visualization frame rate
 FRAME_TIME = 1.0 / TARGET_FPS  # Time per frame in seconds
+SENSOR_SPACING_M = 2  # Default 3D spacing between multiple sensors (meters)
 
 # Mapping mode thresholds
 DOWNSAMPLE_POINT_THRESHOLD = 500  # Trigger downsampling after this many new points

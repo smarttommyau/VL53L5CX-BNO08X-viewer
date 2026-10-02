@@ -61,13 +61,15 @@ pip install -r viewer/requirements.txt
 ## Usage
 
 ```bash
-python -m viewer --port /dev/cu.usbserial-0001
+python -m viewer --device1 port --port1 /dev/ttyUSB0 --sensor-count1 2
 ```
 
 Open http://localhost:8080 in your browser.
 
 **Options:**
-- `--port`, `-p`: Serial port (default: `/dev/cu.usbserial-0001`)
+- `--device1`: Device type for device 1 (default: `port`)
+- `--port1`, `--port`, `-p`: Serial port path for device 1 (default: `/dev/cu.usbserial-0001`)
+- `--sensor-count1`: Number of VL53 sensors expected on device 1 (default: `1`)
 - `--baud`, `-b`: Baud rate (default: `115200`)
 - `--viser-port`: Viser server port (default: `8080`)
 - `--debug`: Enable verbose logging
