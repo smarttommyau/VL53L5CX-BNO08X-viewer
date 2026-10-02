@@ -1,8 +1,7 @@
 /*
- * VL53L5CX ToF Sensor + BNO08X IMU Reader for ESP32
+ * VL53L5CX ToF Sensor Reader for ESP32
  *
- * Reads 8x8 distance data from VL53L5CX and orientation from BNO08X,
- * outputs JSON over serial.
+ * Reads 8x8 distance data from VL53L5CX and outputs JSON over serial.
  *
  * Wiring (both sensors share I2C bus):
  *   VIN -> 3V3

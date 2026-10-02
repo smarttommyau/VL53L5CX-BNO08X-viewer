@@ -46,7 +46,7 @@ class VL53L5CXSensor {
               // Check if new ToF data is available
             if (sensor.isDataReady()) {
                 if (sensor.getRangingData(&measurementData)) {
-                // Output JSON with distance and quaternion data
+                // Output JSON with distance and status data
                 Serial.print("{\"distances\":[");
 
                 for (int i = 0; i < 64; i++) {
@@ -66,7 +66,7 @@ class VL53L5CXSensor {
                 Serial.print(VERSION);
                 Serial.print("\",\"sda\":");
                 Serial.print(sdaPin);
-                Serial.println("\"}");
+                Serial.println("}");
                 }
             }
         }

@@ -26,8 +26,6 @@ class SerialReader:
         # Data storage
         self.distances = np.zeros(config.NUM_ZONES, dtype=np.float32)
         self.status = np.zeros(config.NUM_ZONES, dtype=np.uint8)
-        self.quaternion = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)  # wxyz identity
-        self._imu_connected = False  # True if IMU data has been received
         self._data_lock = threading.Lock()
 
         # FPS tracking
@@ -43,12 +41,6 @@ class SerialReader:
         """Current data frame rate from sensor."""
         with self._data_lock:
             return self._data_fps
-
-    @property
-    def imu_connected(self) -> bool:
-        """True if IMU data has been received (quat field present in serial data)."""
-        with self._data_lock:
-            return self._imu_connected
 
     def connect(self):
         """Open serial connection."""
@@ -76,14 +68,14 @@ class SerialReader:
             self._thread.join(timeout=1)
             self._thread = None
 
-    def get_data(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Get a copy of the latest distance, status, and quaternion data.
+    def get_data(self) -> tuple[np.ndarray, np.ndarray]:
+        """Get a copy of the latest distance and status data.
 
         Returns:
-            Tuple of (distances, status, quaternion) arrays
+            Tuple of (distances, status) arrays
         """
         with self._data_lock:
-            return self.distances.copy(), self.status.copy(), self.quaternion.copy()
+            return self.distances.copy(), self.status.copy()
 
     def _validate_distances(self, distances: list) -> bool:
         """Validate distance values are within expected range."""
@@ -91,17 +83,6 @@ class SerialReader:
             if not isinstance(d, (int, float)):
                 return False
             if math.isnan(d) or math.isinf(d):
-                return False
-        return True
-
-    def _validate_quaternion(self, quat: list) -> bool:
-        """Validate quaternion values."""
-        if len(quat) != 4:
-            return False
-        for q in quat:
-            if not isinstance(q, (int, float)):
-                return False
-            if math.isnan(q) or math.isinf(q):
                 return False
         return True
 
@@ -152,10 +133,6 @@ class SerialReader:
                                     if not self._validate_distances(distances):
                                         logger.warning("Invalid distance values detected (NaN/Inf)")
                                         continue
-                                    # Validate quaternion if present
-                                    if "quat" in data and not self._validate_quaternion(data["quat"]):
-                                        logger.warning("Invalid quaternion values detected (NaN/Inf)")
-                                        data.pop("quat")  # Still process distances, skip bad quaternion
                                     # Check version (warn once)
                                     if not self._version_checked:
                                         self._version_checked = True
@@ -174,13 +151,6 @@ class SerialReader:
                                     with self._data_lock:
                                         self.distances = np.array(distances, dtype=np.float32)
                                         self.status = np.array(status, dtype=np.uint8)
-                                        if "quat" in data:
-                                            self.quaternion = np.array(
-                                                data["quat"], dtype=np.float32
-                                            )
-                                            self._imu_connected = True
-                                        else:
-                                            logger.debug("No quaternion data in packet (IMU may not be connected or firmware outdated)")
                                     # Track data FPS
                                     self._frame_count += 1
                                     now = time.time()

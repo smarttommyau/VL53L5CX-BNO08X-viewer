@@ -27,9 +27,6 @@ class SceneHandles:
 
     Hierarchy:
         /breadboard                     # Breadboard frame (world origin)
-            /breadboard/imu             # IMU board frame
-                /breadboard/imu/mesh    # Board mesh
-                /breadboard/imu/sensor  # Sensor origin frame
             /breadboard/tof             # ToF board frame
                 /breadboard/tof/mesh    # Board mesh
                 /breadboard/tof/sensor  # Sensor origin frame (with yaw)
@@ -39,9 +36,6 @@ class SceneHandles:
     """
 
     breadboard: viser.FrameHandle
-    imu_board: viser.FrameHandle
-    imu_mesh: viser.MeshHandle
-    imu_sensor: viser.FrameHandle
     tof_board: viser.FrameHandle
     tof_mesh: viser.MeshHandle
     tof_sensor: viser.FrameHandle
@@ -128,32 +122,6 @@ def create_scene_hierarchy(
     # Breadboard frame at world origin
     breadboard = server.scene.add_frame("/breadboard", show_axes=False)
 
-    # IMU board frame (positioned at board center in world)
-    # Board center = world_position - sensor_offset (sensor is at world_position)
-    imu_board_pos = tuple(
-        np.array(config.IMU_BOARD.world_position) - np.array(config.IMU_BOARD.sensor_offset)
-    )
-    imu_board = server.scene.add_frame(
-        "/breadboard/imu",
-        show_axes=False,
-        position=imu_board_pos,
-    )
-    imu_mesh = _create_board_mesh(
-        server,
-        scene_path="/breadboard/imu/mesh",
-        board_config=config.IMU_BOARD,
-        assets_dir=assets_dir,
-    )
-    # IMU sensor frame (at sensor_offset from board center)
-    imu_sensor = server.scene.add_frame(
-        "/breadboard/imu/sensor",
-        show_axes=True,
-        axes_length=0.01,
-        axes_radius=0.001,
-        position=config.IMU_BOARD.sensor_offset,
-        wxyz=_yaw_to_wxyz(config.IMU_BOARD.sensor_yaw_deg),
-    )
-
     # ToF board frame (positioned at board center in world)
     tof_board_pos = tuple(
         np.array(config.TOF_BOARD.world_position) - np.array(config.TOF_BOARD.sensor_offset)
@@ -184,9 +152,6 @@ def create_scene_hierarchy(
 
     return SceneHandles(
         breadboard=breadboard,
-        imu_board=imu_board,
-        imu_mesh=imu_mesh,
-        imu_sensor=imu_sensor,
         tof_board=tof_board,
         tof_mesh=tof_mesh,
         tof_sensor=tof_sensor,

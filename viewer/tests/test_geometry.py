@@ -3,77 +3,7 @@
 import numpy as np
 import pytest
 
-from viewer.geometry import correct_imu_to_tof_frame, rotate_points_by_quaternion, compute_zone_angles, distances_to_points
-
-
-class TestCorrectImuToTofFrame:
-    """Tests for IMU-to-ToF frame correction."""
-
-    def test_applies_90_degree_clockwise_rotation(self):
-        """Correction should rotate 90° clockwise around Z."""
-        # Identity IMU quaternion
-        identity = np.array([1, 0, 0, 0], dtype=np.float32)
-
-        corrected = correct_imu_to_tof_frame(identity)
-
-        # Result should be 90° clockwise around Z: [cos(-45°), 0, 0, sin(-45°)]
-        expected = np.array([0.7071068, 0, 0, -0.7071068], dtype=np.float32)
-        np.testing.assert_allclose(corrected, expected, atol=1e-5)
-
-    def test_correction_composes_with_imu_rotation(self):
-        """Correction should compose correctly with IMU rotation."""
-        # If IMU reports 90° counterclockwise (the physical offset),
-        # correction should result in identity
-        imu_90_ccw = np.array([0.7071068, 0, 0, 0.7071068], dtype=np.float32)
-
-        corrected = correct_imu_to_tof_frame(imu_90_ccw)
-
-        # 90° CW * 90° CCW = identity
-        expected_identity = np.array([1, 0, 0, 0], dtype=np.float32)
-        np.testing.assert_allclose(np.abs(corrected), np.abs(expected_identity), atol=1e-5)
-
-
-class TestRotatePointsByQuaternion:
-    """Tests for quaternion rotation function."""
-
-    def test_identity_quaternion_no_change(self):
-        """Identity quaternion should not change points."""
-        points = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float32)
-        identity_quat = np.array([1, 0, 0, 0], dtype=np.float32)  # wxyz
-
-        rotated = rotate_points_by_quaternion(points, identity_quat)
-
-        np.testing.assert_allclose(rotated, points, atol=1e-6)
-
-    def test_90_degree_rotation_around_z(self):
-        """90 degree rotation around Z should map X to Y."""
-        points = np.array([[1, 0, 0]], dtype=np.float32)
-        # 90 degrees around Z: w=cos(45°)=0.707, z=sin(45°)=0.707
-        z_rot_quat = np.array([0.7071068, 0, 0, 0.7071068], dtype=np.float32)
-
-        rotated = rotate_points_by_quaternion(points, z_rot_quat)
-
-        np.testing.assert_allclose(rotated[0], [0, 1, 0], atol=1e-5)
-
-    def test_180_degree_rotation_around_z(self):
-        """180 degree rotation around Z should negate X and Y."""
-        points = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
-        # 180 degrees around Z: w=0, z=1
-        z_rot_quat = np.array([0, 0, 0, 1], dtype=np.float32)
-
-        rotated = rotate_points_by_quaternion(points, z_rot_quat)
-
-        np.testing.assert_allclose(rotated[0], [-1, 0, 0], atol=1e-5)
-        np.testing.assert_allclose(rotated[1], [0, -1, 0], atol=1e-5)
-
-    def test_preserves_point_count(self):
-        """Rotation should preserve number of points."""
-        points = np.random.rand(64, 3).astype(np.float32)
-        quat = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float32)  # Arbitrary rotation
-
-        rotated = rotate_points_by_quaternion(points, quat)
-
-        assert rotated.shape == points.shape
+from viewer.geometry import compute_zone_angles, distances_to_points
 
 
 class TestComputeZoneAngles:
