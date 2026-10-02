@@ -219,25 +219,6 @@ class VL53L5CXViewer:
 
     def _setup_gui(self, server: viser.ViserServer, mapping_state: MappingState):
         """Initialize GUI controls."""
-        with server.gui.add_folder("Sensors Info"):
-            # Create GUI subfolders for all pre-allocated sensors
-            sensors = self.sensor_manager.get_all_sensors()
-            for sensor in sensors:
-                sda_str = str(sensor.sda) if sensor.sda is not None else "Pending..."
-                with server.gui.add_folder(f"Sensor {sensor.id}") as folder:
-                    sensor.gui_folder = folder
-                    sensor.gui_device_text = server.gui.add_text(
-                        "DeviceName", initial_value=sensor.deviceName, disabled=True
-                    )
-                    sensor.gui_sda_text = server.gui.add_text(
-                        "SDA", initial_value=sda_str, disabled=True
-                    )
-                    sensor.gui_status_text = server.gui.add_text(
-                        "Status", initial_value="Waiting...", disabled=True
-                    )
-                    sensor.gui_freq_text = server.gui.add_text(
-                        "Frequency (Hz)", initial_value="0.0", disabled=True
-                    )
 
         with server.gui.add_folder("Settings"):
             self.point_size_slider = server.gui.add_slider(
