@@ -16,13 +16,12 @@ class VL53L5CXSensor {
         VL53L5CXSensor(int sda, int scl, TwoWire *wire = &Wire) : sdaPin(sda), sclPin(scl), wirePort(wire) {
 
             wirePort->begin(sdaPin, sclPin);
-            Wire.begin(sdaPin, sclPin);
-            Wire.setClock(I2C_SPEED);
+            wirePort->setClock(I2C_SPEED);
 
             Serial.printf("{\"status\":\"i2c_ready\", \"sda\":%d}\n", sdaPin);
 
             // Initialize sensor
-            if (!sensor.begin()) {
+            if (!sensor.begin(DEFAULT_I2C_ADDR >> 1, *wirePort)) {
                 Serial.printf("{\"error\":\"sensor_init_failed\", \"sda\":%d}\n", sdaPin);
                 while (1) {
                 delay(1000);
