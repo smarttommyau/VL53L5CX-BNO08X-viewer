@@ -2,6 +2,7 @@
 #define VLL53LCX_FEATURES_H
 #include <SparkFun_VL53L5CX_Library.h>
 #include "config.h"
+#include "connection_adapter.h"
 
 class VL53L5CXSensor {
     SparkFun_VL53L5CX sensor;
@@ -17,17 +18,16 @@ class VL53L5CXSensor {
 
             wirePort->begin(sdaPin, sclPin);
             wirePort->setClock(I2C_SPEED);
-
-            Serial.printf("{\"status\":\"i2c_ready\", \"sda\":%d}\n", sdaPin);
+            ConnectionAdapter::getInstance().printf("{\"status\":\"i2c_ready\", \"sda\":%d}\n", sdaPin);
 
             // Initialize sensor
             if (!sensor.begin(DEFAULT_I2C_ADDR >> 1, *wirePort)) {
-                Serial.printf("{\"error\":\"sensor_init_failed\", \"sda\":%d}\n", sdaPin);
+                ConnectionAdapter::getInstance().printf("{\"error\":\"sensor_init_failed\", \"sda\":%d}\n", sdaPin);
                 while (1) {
                 delay(1000);
                 }
             }
-            Serial.printf("{\"status\":\"sensor_found\", \"sda\":%d}\n", sdaPin);
+            ConnectionAdapter::getInstance().printf("{\"status\":\"sensor_found\", \"sda\":%d}\n", sdaPin);
 
              // Configure sensor for 8x8 resolution
             sensor.setResolution(64);  // 64 zones = 8x8
@@ -38,7 +38,7 @@ class VL53L5CXSensor {
             // Start ranging
             sensor.startRanging();
 
-            Serial.printf("{\"status\":\"ranging_started\",\"resolution\":\"8x8\",\"frequency_hz\":15, \"sda\":%d}\n", sdaPin);
+            ConnectionAdapter::getInstance().printf("{\"status\":\"ranging_started\",\"resolution\":\"8x8\",\"frequency_hz\":15, \"sda\":%d}\n", sdaPin);
         }
 
         void check() {
@@ -46,26 +46,27 @@ class VL53L5CXSensor {
             if (sensor.isDataReady()) {
                 if (sensor.getRangingData(&measurementData)) {
                 // Output JSON with distance and status data
-                Serial.print("{\"distances\":[");
+                ConnectionAdapter::getInstance().printf("{\"distances\":[");
 
                 for (int i = 0; i < 64; i++) {
                     // Distance in mm
-                    Serial.print(measurementData.distance_mm[i]);
-                    if (i < 63) Serial.print(",");
+
+                    ConnectionAdapter::getInstance().printf("%d", measurementData.distance_mm[i]);
+                    if (i < 63) ConnectionAdapter::getInstance().printf(",");
                 }
 
-                Serial.print("],\"status\":[");
+                ConnectionAdapter::getInstance().printf("],\"status\":[");
 
                 for (int i = 0; i < 64; i++) {
                     // Target status (5 = valid, others = various error states)
-                    Serial.print(measurementData.target_status[i]);
-                    if (i < 63) Serial.print(",");
+                    ConnectionAdapter::getInstance().printf("%u", measurementData.target_status[i]);
+                    if (i < 63) ConnectionAdapter::getInstance().printf(",");
                 }
-                Serial.print("],\"v\":\"");
-                Serial.print(VERSION);
-                Serial.print("\",\"sda\":");
-                Serial.print(sdaPin);
-                Serial.println("}");
+                ConnectionAdapter::getInstance().printf("],\"v\":\"");
+                ConnectionAdapter::getInstance().printf(VERSION);
+                ConnectionAdapter::getInstance().printf("\",\"sda\":");
+                ConnectionAdapter::getInstance().printf("%d", sdaPin);
+                ConnectionAdapter::getInstance().printf("}\n");
                 }
             }
         }
