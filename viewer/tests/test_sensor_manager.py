@@ -150,3 +150,24 @@ class TestArgumentParsing:
         assert dev_cfg[1]["device"] == "port"
         assert dev_cfg[1]["port"] == "/dev/ttyACM0"
         assert dev_cfg[1]["sensor_count"] == 3
+
+    def test_parse_args_multi_device(self, monkeypatch):
+        """Should parse multiple devices (--device1, --port1, --sensor-count1, --device2, --port2, --sensor-count2)."""
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "viewer",
+                "--device1", "port",
+                "--port1", "/dev/ttyACM0",
+                "--sensor-count1", "1",
+                "--device2", "port",
+                "--port2", "/dev/ttyACM1",
+                "--sensor-count2", "1",
+            ],
+        )
+        args, dev_cfg = parse_args()
+
+        assert len(dev_cfg) == 2
+        assert dev_cfg[1] == {"device": "port", "port": "/dev/ttyACM0", "sensor_count": 1}
+        assert dev_cfg[2] == {"device": "port", "port": "/dev/ttyACM1", "sensor_count": 1}
