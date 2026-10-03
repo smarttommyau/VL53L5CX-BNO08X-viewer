@@ -14,6 +14,7 @@ import viser
 from scipy.spatial.transform import Rotation
 
 from . import config
+from .export_data import DataExporter
 from .filters import fit_plane, fit_plane_ransac
 from .geometry import (
     CoordinateMethod,
@@ -107,6 +108,7 @@ class VL53L5CXViewer:
         self.devices_config = devices_config
         self.sensor_manager = SensorManager()
         self.data_readers: dict[str, object] = {}
+        self.exporter = DataExporter()
 
         self.zone_angles = compute_zone_angles()
 
@@ -265,6 +267,49 @@ class VL53L5CXViewer:
         """Initialize GUI controls."""
 
         # sensors are setup dynamically in _initialize_sensor_viser, so we only setup global controls here
+
+        with server.gui.add_folder("Recording / Export"):
+            self.rec_status_text = server.gui.add_text(
+                "Record Status", initial_value="Not Recording", disabled=True
+            )
+            self.rec_button = server.gui.add_button("Start Recording")
+
+            @self.rec_button.on_click
+            def _on_rec_click(event: viser.GuiEvent) -> None:
+                if not self.exporter.is_recording:
+                    # Start recording
+                    active_sensors = self.sensor_manager.get_all_sensors()
+                    self.exporter.start_recording(active_sensors)
+                    self.rec_status_text.value = "Recording..."
+                    self.rec_button.label = "Stop Recording"
+
+                    modal = server.gui.add_modal("Recording Started")
+                    with modal:
+                        server.gui.add_markdown(
+                            f"**Recording Started!**\n\nRecording sensor data for {len(active_sensors)} active sensor(s)."
+                        )
+                        ok_btn = server.gui.add_button("OK")
+
+                        @ok_btn.on_click
+                        def _(e, m=modal):
+                            m.close()
+                else:
+                    # Stop recording and export data
+                    saved_dir = self.exporter.stop_recording()
+                    self.rec_status_text.value = "Not Recording"
+                    self.rec_button.label = "Start Recording"
+
+                    if saved_dir:
+                        modal = server.gui.add_modal("Recording Exported")
+                        with modal:
+                            server.gui.add_markdown(
+                                f"**Recording Saved Successfully!**\n\n**Export Location:**\n`{saved_dir.resolve()}`"
+                            )
+                            ok_btn = server.gui.add_button("OK")
+
+                            @ok_btn.on_click
+                            def _(e, m=modal):
+                                m.close()
 
         with server.gui.add_folder("Settings"):
             self.point_size_slider = server.gui.add_slider(
@@ -426,6 +471,9 @@ class VL53L5CXViewer:
                 sensor, newly_assigned = self.sensor_manager.process_packet(
                     dev_name, distances, status, sda
                 )
+
+                if self.exporter.is_recording:
+                    self.exporter.record_packet(sensor.id, distances, status)
 
                 if sensor.frame_handle is None:
                     all_sensors = self.sensor_manager.get_all_sensors()
