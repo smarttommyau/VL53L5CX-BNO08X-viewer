@@ -7,6 +7,9 @@ Real-time 3D point cloud viewer for the VL53L5CX multi-zone time-of-flight senso
 ## Features
 
 - **64-zone 3D visualization** - See the VL53L5CX's 8x8 measurement grid as rays in 3D space
+- **Interactive 3D sensor positioning** - Drag translation gizmos and rotate sensors in 3D space to re-orient physical sensor setups
+- **Data Export & Recording** - Record real-time sensor streams and export formatted CSV data and metadata (`sensors_meta_data.txt`)
+- **Recording Player** - Replay recorded datasets synchronized in time with timeline scrubbing and playback controls
 - **Real-time IMU tracking** - BNO085 orientation rotates the virtual view to match physical movement
 - **Temporal filtering** - Exponential moving average smooths noisy measurements
 - **Plane fitting** - Least squares and RANSAC methods for surface detection
@@ -69,6 +72,9 @@ python -m viewer --device1 wifi --IP1 192.168.1.100 --sensor-count1 1
 
 # Mixed devices (1 WiFi and 1 USB serial port):
 python -m viewer --device1 wifi --IP1 192.168.1.100 --sensor-count1 1 --device2 port --port2 /dev/ttyACM1 --sensor-count2 1
+
+# Replay recorded data:
+python -m player export_data/2026-10-04_15-30-00/
 ```
 
 Open http://localhost:8080 in your browser.

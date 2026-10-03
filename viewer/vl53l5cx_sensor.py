@@ -9,7 +9,6 @@ import viser
 
 from . import config
 from .filters import TemporalFilter
-from .scene import _yaw_to_wxyz, update_sensor_rays
 
 logger = logging.getLogger("vl53l5cx_viewer.sensor")
 
@@ -18,8 +17,8 @@ class VL53L5CXSensor:
     """Represents a single VL53L5CX sensor instance.
 
     Attributes:
-        deviceName: Serial port identifier (e.g., "/dev/ttyUSB0")
-        deviceType: Device type descriptor (e.g., "port")
+        deviceName: Serial port identifier or IP address (e.g., "/dev/ttyUSB0", "192.168.1.100")
+        deviceType: Device type descriptor (e.g., "port", "wifi")
         sda: SDA pin number from JSON (None until assigned)
         id: Unique sensor ID assigned sequentially (1, 2, ...)
     """
@@ -40,6 +39,10 @@ class VL53L5CXSensor:
         self._active: bool = True
         self.last_seen: float = 0.0
 
+        # Pose in 3D world space
+        self.initial_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self.initial_wxyz: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+
         # Data storage
         self.distances: Optional[np.ndarray] = None
         self.status: Optional[np.ndarray] = None
@@ -51,7 +54,7 @@ class VL53L5CXSensor:
         self._last_fps_time: float = time.time()
 
         # Viser handles (3D scene)
-        self.frame_handle: Optional[viser.FrameHandle] = None
+        self.frame_handle: Optional[viser.TransformControlsHandle] = None
         self.mesh_handle: Optional[viser.MeshHandle] = None
         self.points_handle: Optional[viser.PointCloudHandle] = None
         self.rays_handles: list = []
@@ -62,8 +65,11 @@ class VL53L5CXSensor:
         self.gui_folder = None
         self.gui_device_text = None
         self.gui_sda_text = None
+        self.gui_pos_text = None
         self.gui_status_text = None
         self.gui_freq_text = None
+        self.gui_gizmo_cb = None
+        self.gui_reset_btn = None
 
     @property
     def id(self) -> int:
@@ -129,7 +135,7 @@ class VL53L5CXSensor:
         if self.distances is None or self.status is None:
             return np.empty((0, 3), dtype=np.float32), np.empty((0, 3), dtype=np.uint8)
 
-        from .geometry import CoordinateMethod, distances_to_points, get_colors
+        from .geometry import distances_to_points, get_colors
 
         points_local = distances_to_points(self.distances, zone_angles, coord_method)
         colors = get_colors(self.distances, self.status)
@@ -150,6 +156,12 @@ class VL53L5CXSensor:
 
         if self.gui_device_text is not None:
             self.gui_device_text.value = self.deviceName
+
+        if self.frame_handle is not None and self.gui_pos_text is not None:
+            pos = self.frame_handle.position
+            self.gui_pos_text.value = (
+                f"X: {pos[0]:.2f}, Y: {pos[1]:.2f}, Z: {pos[2]:.2f}"
+            )
 
         if self.distances is not None and self.status is not None:
             valid_mask = (self.status == 5) & (self.distances >= config.MIN_RANGE_MM)
