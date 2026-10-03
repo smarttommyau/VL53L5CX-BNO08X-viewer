@@ -22,6 +22,7 @@ from .geometry import (
     get_colors,
 )
 from .logging_config import setup_logging
+from .network_reader import NetworkReader
 from .scene import (
     _create_board_mesh,
     _yaw_to_wxyz,
@@ -105,24 +106,39 @@ class VL53L5CXViewer:
         self.baud = baud
         self.devices_config = devices_config
         self.sensor_manager = SensorManager()
-        self.serial_readers: dict[str, SerialReader] = {}
+        self.data_readers: dict[str, object] = {}
 
         self.zone_angles = compute_zone_angles()
 
         # Initialize devices and pre-allocate expected sensors
         for idx, dev in sorted(devices_config.items()):
-            port = dev["port"]
-            device_type = dev.get("device", "port")
-            sensor_count = dev["sensor_count"]
-            self.sensor_manager.add_device(
-                deviceName=port, sensor_count=sensor_count, deviceType=device_type
-            )
-            if port not in self.serial_readers:
-                self.serial_readers[port] = SerialReader(port, baud)
+            dev_type = dev.get("device", "port").lower()
+            sensor_count = dev.get("sensor_count", 1)
 
-        # Legacy backward compatibility property
-        first_port = list(self.serial_readers.keys())[0] if self.serial_readers else "/dev/null"
-        self.serial_reader = self.serial_readers.get(first_port)
+            if dev_type == "wifi":
+                ip = dev.get("ip", "192.168.1.100")
+                net_port = dev.get("telnet_port", 2340)
+                device_name = ip
+                self.sensor_manager.add_device(
+                    deviceName=device_name, sensor_count=sensor_count, deviceType="wifi"
+                )
+                if device_name not in self.data_readers:
+                    self.data_readers[device_name] = NetworkReader(
+                        host=ip, port=net_port
+                    )
+            else:  # "port" / USB mode
+                port = dev.get("port", "/dev/cu.usbserial-0001")
+                device_name = port
+                self.sensor_manager.add_device(
+                    deviceName=device_name, sensor_count=sensor_count, deviceType="port"
+                )
+                if device_name not in self.data_readers:
+                    self.data_readers[device_name] = SerialReader(port, baud)
+
+        # Backward compatibility properties
+        first_reader = list(self.data_readers.values())[0] if self.data_readers else None
+        self.serial_readers = self.data_readers
+        self.serial_reader = first_reader
 
     def _initialize_sensor_viser(
         self,
@@ -373,8 +389,8 @@ class VL53L5CXViewer:
             if m.value == self.coord_method_dropdown.value
         )
 
-        # Collect pending packets from all serial readers
-        for port, reader in self.serial_readers.items():
+        # Collect pending packets from all data readers (serial and network)
+        for reader_id, reader in self.data_readers.items():
             packets = reader.get_pending_packets()
             for dev_name, distances, status, sda in packets:
                 sensor, newly_assigned = self.sensor_manager.process_packet(
@@ -499,12 +515,16 @@ class VL53L5CXViewer:
 
     def run(self, host: str = "0.0.0.0", port: int = 8080):
         """Start the viewer."""
-        for reader in self.serial_readers.values():
+        for reader in self.data_readers.values():
             try:
                 reader.connect()
                 reader.start()
             except Exception as e:
-                logger.error("Failed to connect to %s: %s", reader.port, e)
+                logger.error(
+                    "Failed to connect reader for %s: %s",
+                    getattr(reader, "deviceName", reader),
+                    e,
+                )
 
         server = viser.ViserServer(host=host, port=port)
         logger.info("Viser server started at http://localhost:%d", port)
@@ -533,40 +553,28 @@ class VL53L5CXViewer:
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:
-            for reader in self.serial_readers.values():
+            for reader in self.data_readers.values():
                 reader.stop()
 
 
 def parse_args():
-    """Parse command line arguments."""
+    """Parse command line arguments supporting multiple devices (--deviceX, --portX, --IPX, --sensor-countX)."""
     parser = argparse.ArgumentParser(description="VL53L5CX Point Cloud Viewer")
 
-    parser.add_argument(
-        "--device1",
-        dest="device1",
-        default="port",
-        help="Device type/name for device 1 (default: port)",
-    )
-    parser.add_argument(
-        "--port1",
-        dest="port1",
-        default=None,
-        help="Serial port for device 1 (e.g. /dev/cu.usbserial-0001)",
-    )
     parser.add_argument(
         "--port",
         "-p",
         dest="port_alias",
-        default="/dev/cu.usbserial-0001",
-        help="Serial port alias for device 1",
+        default=None,
+        help="Fallback serial port for device 1",
     )
     parser.add_argument(
-        "--sensor-count1",
-        type=int,
-        default=1,
-        help="Number of VL53 sensors on device 1 (default: 1)",
+        "--IP",
+        "--ip",
+        dest="ip_alias",
+        default=None,
+        help="Fallback IP address for WiFi device 1",
     )
-
     parser.add_argument(
         "--baud", "-b", type=int, default=115200, help="Baud rate (default: 115200)"
     )
@@ -582,56 +590,100 @@ def parse_args():
 
     args, unknown = parser.parse_known_args()
 
-    dev1_port = args.port1 if args.port1 is not None else args.port_alias
+    devices_config: dict[int, dict] = {}
 
-    devices_config: dict[int, dict] = {
-        1: {
-            "device": args.device1,
-            "port": dev1_port,
-            "sensor_count": args.sensor_count1,
-        }
-    }
+    def get_device_entry(idx: int) -> dict:
+        if idx not in devices_config:
+            devices_config[idx] = {
+                "device": "port",
+                "port": "/dev/cu.usbserial-0001",
+                "ip": "192.168.1.100",
+                "telnet_port": 2340,
+                "sensor_count": 1,
+            }
+        return devices_config[idx]
 
-    # Dynamically scan for any extra --deviceX, --portX, --sensor-countX flags
-    for arg in unknown:
-        m_dev = re.match(r"--device(\d+)=(.*)", arg)
+    tokens = sys.argv[1:]
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+
+        m_dev = re.match(r"^--device(\d+)(?:=(.*))?$", token, re.IGNORECASE)
         if m_dev:
             idx = int(m_dev.group(1))
             val = m_dev.group(2)
-            if idx not in devices_config:
-                devices_config[idx] = {
-                    "device": val,
-                    "port": "/dev/cu.usbserial-0001",
-                    "sensor_count": 1,
-                }
-            else:
-                devices_config[idx]["device"] = val
+            if val is None and i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+                val = tokens[i + 1]
+                i += 1
+            if val:
+                get_device_entry(idx)["device"] = val.lower()
+            i += 1
+            continue
 
-        m_port = re.match(r"--port(\d+)=(.*)", arg)
+        m_port = re.match(r"^--port(\d+)(?:=(.*))?$", token, re.IGNORECASE)
         if m_port:
             idx = int(m_port.group(1))
             val = m_port.group(2)
-            if idx not in devices_config:
-                devices_config[idx] = {
-                    "device": "port",
-                    "port": val,
-                    "sensor_count": 1,
-                }
-            else:
-                devices_config[idx]["port"] = val
+            if val is None and i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+                val = tokens[i + 1]
+                i += 1
+            if val:
+                get_device_entry(idx)["port"] = val
+            i += 1
+            continue
 
-        m_cnt = re.match(r"--sensor-count(\d+)=(\d+)", arg)
+        m_ip = re.match(r"^--ip(\d+)(?:=(.*))?$", token, re.IGNORECASE)
+        if m_ip:
+            idx = int(m_ip.group(1))
+            val = m_ip.group(2)
+            if val is None and i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+                val = tokens[i + 1]
+                i += 1
+            if val:
+                entry = get_device_entry(idx)
+                entry["ip"] = val
+                entry["device"] = "wifi"
+            i += 1
+            continue
+
+        m_cnt = re.match(r"^--sensor-count(\d+)(?:=(.*))?$", token, re.IGNORECASE)
         if m_cnt:
             idx = int(m_cnt.group(1))
-            cnt = int(m_cnt.group(2))
-            if idx not in devices_config:
-                devices_config[idx] = {
-                    "device": "port",
-                    "port": "/dev/cu.usbserial-0001",
-                    "sensor_count": cnt,
-                }
-            else:
-                devices_config[idx]["sensor_count"] = cnt
+            val = m_cnt.group(2)
+            if val is None and i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+                val = tokens[i + 1]
+                i += 1
+            if val and val.isdigit():
+                get_device_entry(idx)["sensor_count"] = int(val)
+            i += 1
+            continue
+
+        i += 1
+
+    # Fallback if no device arguments were provided
+    if not devices_config:
+        if args.ip_alias:
+            devices_config[1] = {
+                "device": "wifi",
+                "ip": args.ip_alias,
+                "telnet_port": 2340,
+                "sensor_count": 1,
+            }
+        else:
+            dev1_port = args.port_alias if args.port_alias is not None else "/dev/cu.usbserial-0001"
+            devices_config[1] = {
+                "device": "port",
+                "port": dev1_port,
+                "ip": "192.168.1.100",
+                "telnet_port": 2340,
+                "sensor_count": 1,
+            }
+    elif args.ip_alias is not None and 1 in devices_config:
+        devices_config[1]["ip"] = args.ip_alias
+        devices_config[1]["device"] = "wifi"
+    elif args.port_alias is not None and 1 in devices_config:
+        if "--port1" not in " ".join(sys.argv):
+            devices_config[1]["port"] = args.port_alias
 
     return args, devices_config
 

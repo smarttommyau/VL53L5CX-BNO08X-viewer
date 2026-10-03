@@ -61,16 +61,24 @@ pip install -r viewer/requirements.txt
 ## Usage
 
 ```bash
-python -m viewer --device1 port --port1 /dev/ttyUSB0 --sensor-count1 2
+# USB Serial device with 2 sensors:
+python -m viewer --device1 port --port1 /dev/ttyACM0 --sensor-count1 2
+
+# WiFi Telnet device (connecting to telnet port 2340):
+python -m viewer --device1 wifi --IP1 192.168.1.100 --sensor-count1 1
+
+# Mixed devices (1 WiFi and 1 USB serial port):
+python -m viewer --device1 wifi --IP1 192.168.1.100 --sensor-count1 1 --device2 port --port2 /dev/ttyACM1 --sensor-count2 1
 ```
 
 Open http://localhost:8080 in your browser.
 
 **Options:**
-- `--device1`: Device type for device 1 (default: `port`)
-- `--port1`, `--port`, `-p`: Serial port path for device 1 (default: `/dev/cu.usbserial-0001`)
-- `--sensor-count1`: Number of VL53 sensors expected on device 1 (default: `1`)
-- `--baud`, `-b`: Baud rate (default: `115200`)
+- `--deviceX`: Device type for device X (`port` or `wifi`, default: `port`)
+- `--portX`, `--port`, `-p`: Serial port path for USB device X (default: `/dev/cu.usbserial-0001`)
+- `--IPX`, `--ipX`, `--IP`: IP address for WiFi device X (connects via Telnet on port `2340`)
+- `--sensor-countX`: Number of VL53 sensors expected on device X (default: `1`)
+- `--baud`, `-b`: Baud rate for serial devices (default: `115200`)
 - `--viser-port`: Viser server port (default: `8080`)
 - `--debug`: Enable verbose logging
 

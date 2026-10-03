@@ -14,10 +14,10 @@
 #include <Wire.h>
 #include <SparkFun_VL53L5CX_Library.h>
 #include "vl53l5cx_features.h"
-
-
+#include "connection_adapter.h"
 
 // Modified to suit our layout
+
 
 
 // sesnors
@@ -28,11 +28,7 @@ VL53L5CXSensor* sensor1 = 0;
 
 void setup() {
   // Initialize serial communication
-  Serial.begin(115200);
-  while (!Serial) {
-    ; // Wait for serial port to connect. Needed for native USB
-  }
-
+  ConnectionAdapter::getInstance().setup();
   // Initialize the VL53L5CX sensor
   sensor0 = new VL53L5CXSensor(SDA_PIN, SCL_PIN);
   #ifdef MULTIPLE_SENSORS
@@ -49,6 +45,10 @@ void loop() {
   #ifdef MULTIPLE_SENSORS
   if (sensor1)
     sensor1->check();
+  #endif
+
+  #ifdef WIFI_MODE
+  ConnectionAdapter::getInstance().loop();
   #endif
 
   // Small delay to prevent overwhelming the serial buffer
