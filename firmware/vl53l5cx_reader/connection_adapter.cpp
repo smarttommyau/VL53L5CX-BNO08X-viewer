@@ -22,8 +22,9 @@ WiFiClient client;
 void ConnectionAdapter::setup() {
     /// Initial serial for debugging and logging
     Serial.begin(SERIAL_BAUD);
-    while (!Serial) {
-        ; // Wait for serial port to connect. Needed for native USB
+    for(int i = 0; i < 10; ++i) {
+        if (Serial) break;
+        delay(100);
     }
 
     // connect to WiFi
@@ -63,10 +64,12 @@ void ConnectionAdapter::printf(const char* format, ...) {
     vsnprintf(buffer, sizeof(buffer), format, args); 
     va_end(args);
 
-    client.write(buffer);
+    // append to telnetBuffer
+    strncat(telnetBuffer, buffer, sizeof(telnetBuffer) - strlen(telnetBuffer) - 1);
 }
 
 void ConnectionAdapter::loop() {
+    ++loopCounter;
     // Check for new client connections
     if (server.hasClient()) {
         if(!client.connected() || !client.available()){
@@ -80,6 +83,12 @@ void ConnectionAdapter::loop() {
         if (client.available()) {
             char c = client.read();
             Serial.write(c); // Echo received data to Serial
+        }
+        if(loopCounter % 10 == 0){ // Send data every 10 loops
+            if(strlen(telnetBuffer) > 0){
+                client.write(telnetBuffer);
+                telnetBuffer[0] = '\0'; // Clear the buffer after sending
+            }
         }
     } else  {
         client.stop(); // Disconnect if the client is no longer connected
