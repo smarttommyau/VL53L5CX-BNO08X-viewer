@@ -16,8 +16,8 @@
 #include "vl53l5cx_features.h"
 #include "connection_adapter.h"
 
-
 // Modified to suit our layout
+
 
 
 // sesnors
@@ -45,6 +45,10 @@ void loop() {
   #ifdef MULTIPLE_SENSORS
   if (sensor1)
     sensor1->check();
+  #endif
+
+  #ifdef WIFI_MODE
+  ConnectionAdapter::getInstance().loop();
   #endif
 
   // Small delay to prevent overwhelming the serial buffer

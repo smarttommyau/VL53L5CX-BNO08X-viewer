@@ -8,12 +8,17 @@ class ConnectionAdapter {
         void printf(const char* format, ...);
         static ConnectionAdapter& getInstance();
 
+    #ifdef WIFI_MODE
+            void loop();
+    #endif    
+
     private:
     //make it singleton
         ConnectionAdapter() {}
         ConnectionAdapter(const ConnectionAdapter&) = delete;
         ConnectionAdapter& operator=(const ConnectionAdapter&) = delete;
         static ConnectionAdapter* instance;
+
 };
 
 
