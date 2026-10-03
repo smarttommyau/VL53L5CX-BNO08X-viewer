@@ -19,3 +19,5 @@ venv/
 
 # Datasheets (link to official sources instead)
 *.pdf
+
+export_data/**
