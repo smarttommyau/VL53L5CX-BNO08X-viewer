@@ -147,20 +147,25 @@ class VL53L5CXViewer:
         index: int,
         total_count: int,
     ):
-        """Initialize Viser 3D scene elements and GUI sidebar folder for a sensor."""
+        """Initialize Viser 3D scene elements and interactive transform controls for a sensor."""
         spacing = getattr(config, "SENSOR_SPACING_M", 0.08)
         x_offset = (index - (total_count - 1) / 2.0) * spacing
-        sensor_pos = (x_offset, 0.0, 0.0)
+        sensor.initial_pos = (x_offset, 0.0, 0.0)
+        sensor.initial_wxyz = _yaw_to_wxyz(config.TOF_BOARD.sensor_yaw_deg)
 
-        # 3D Sensor frame
-        sensor.frame_handle = server.scene.add_frame(
+        # Interactive 3D Transform Controls frame allowing position dragging and rotation
+        sensor.frame_handle = server.scene.add_transform_controls(
             sensor.hierarchy_path,
-            show_axes=True,
-            axes_length=0.01,
-            axes_radius=0.001,
-            position=sensor_pos,
-            wxyz=_yaw_to_wxyz(config.TOF_BOARD.sensor_yaw_deg),
+            scale=0.08,
+            position=sensor.initial_pos,
+            wxyz=sensor.initial_wxyz,
         )
+
+        @sensor.frame_handle.on_update
+        def _on_transform_update(
+            handle: viser.TransformControlsHandle, s=sensor
+        ) -> None:
+            s.update_gui_and_label()
 
         # Board mesh under sensor frame
         assets_dir = Path(__file__).parent.parent / "assets"
@@ -216,12 +221,35 @@ class VL53L5CXViewer:
                     sensor.gui_sda_text = server.gui.add_text(
                         "SDA", initial_value=sda_str, disabled=True
                     )
+                    sensor.gui_pos_text = server.gui.add_text(
+                        "Position (m)",
+                        initial_value=f"X: {sensor.initial_pos[0]:.2f}, Y: {sensor.initial_pos[1]:.2f}, Z: {sensor.initial_pos[2]:.2f}",
+                        disabled=True,
+                    )
                     sensor.gui_status_text = server.gui.add_text(
                         "Status", initial_value="Waiting...", disabled=True
                     )
                     sensor.gui_freq_text = server.gui.add_text(
                         "Frequency (Hz)", initial_value="0.0", disabled=True
                     )
+                    gizmo_cb = server.gui.add_checkbox(
+                        "Show Gizmo", initial_value=True
+                    )
+                    reset_btn = server.gui.add_button("Reset Pose")
+
+                    @gizmo_cb.on_update
+                    def _on_gizmo_toggle(
+                        event: viser.GuiEvent, s=sensor, cb=gizmo_cb
+                    ) -> None:
+                        if s.frame_handle is not None:
+                            s.frame_handle.visible = cb.value
+
+                    @reset_btn.on_click
+                    def _on_reset_click(event: viser.GuiEvent, s=sensor) -> None:
+                        if s.frame_handle is not None:
+                            s.frame_handle.position = s.initial_pos
+                            s.frame_handle.wxyz = s.initial_wxyz
+                            s.update_gui_and_label()
 
     def _setup_scene(self, server: viser.ViserServer):
         """Initialize the 3D scene."""
@@ -235,6 +263,8 @@ class VL53L5CXViewer:
 
     def _setup_gui(self, server: viser.ViserServer, mapping_state: MappingState):
         """Initialize GUI controls."""
+
+        # sensors are setup dynamically in _initialize_sensor_viser, so we only setup global controls here
 
         with server.gui.add_folder("Settings"):
             self.point_size_slider = server.gui.add_slider(
@@ -420,23 +450,33 @@ class VL53L5CXViewer:
 
                 if len(points_local) > 0:
                     if self.mapping_checkbox.value:
-                        # Transform local points to world space
-                        spacing = getattr(config, "SENSOR_SPACING_M", 0.08)
-                        all_sensors = self.sensor_manager.get_all_sensors()
-                        idx = (
-                            all_sensors.index(sensor)
-                            if sensor in all_sensors
-                            else 0
-                        )
-                        x_offset = (idx - (len(all_sensors) - 1) / 2.0) * spacing
+                        # Transform local points to world space using the sensor's current user-dragged 3D pose
+                        if sensor.frame_handle is not None:
+                            sensor_pos = np.array(sensor.frame_handle.position)
+                            sensor_wxyz = sensor.frame_handle.wxyz
+                        else:
+                            spacing = getattr(config, "SENSOR_SPACING_M", 0.08)
+                            all_sensors = self.sensor_manager.get_all_sensors()
+                            idx = (
+                                all_sensors.index(sensor)
+                                if sensor in all_sensors
+                                else 0
+                            )
+                            x_offset = (idx - (len(all_sensors) - 1) / 2.0) * spacing
+                            sensor_pos = np.array([x_offset, 0.0, 0.0])
+                            sensor_wxyz = _yaw_to_wxyz(config.TOF_BOARD.sensor_yaw_deg)
 
-                        sensor_yaw = Rotation.from_euler(
-                            "z", config.TOF_BOARD.sensor_yaw_deg, degrees=True
-                        )
+                        sensor_rot = Rotation.from_quat([
+                            sensor_wxyz[1],
+                            sensor_wxyz[2],
+                            sensor_wxyz[3],
+                            sensor_wxyz[0],
+                        ])
+
                         world_points = (
-                            sensor_yaw.apply(points_local)
+                            sensor_rot.apply(points_local)
                             + np.array(config.TOF_BOARD.world_position)
-                            + np.array([x_offset, 0.0, 0.0])
+                            + sensor_pos
                         )
                         mapping_state.add(world_points, colors)
 
