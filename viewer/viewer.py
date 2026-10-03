@@ -239,16 +239,29 @@ class VL53L5CXViewer:
                     )
                     reset_btn = server.gui.add_button("Reset Pose")
 
+                    sensor.gui_gizmo_cb = gizmo_cb
+                    sensor.gui_reset_btn = reset_btn
+
+                    if self.exporter.is_recording:
+                        if sensor.frame_handle is not None:
+                            sensor.frame_handle.disable_axes = True
+                            sensor.frame_handle.disable_sliders = True
+                            sensor.frame_handle.disable_rotations = True
+                        gizmo_cb.disabled = True
+                        reset_btn.disabled = True
+
                     @gizmo_cb.on_update
                     def _on_gizmo_toggle(
                         event: viser.GuiEvent, s=sensor, cb=gizmo_cb
                     ) -> None:
-                        if s.frame_handle is not None:
-                            s.frame_handle.visible = cb.value
+                        if s.frame_handle is not None and not self.exporter.is_recording:
+                            s.frame_handle.disable_axes = not cb.value
+                            s.frame_handle.disable_sliders = not cb.value
+                            s.frame_handle.disable_rotations = not cb.value
 
                     @reset_btn.on_click
                     def _on_reset_click(event: viser.GuiEvent, s=sensor) -> None:
-                        if s.frame_handle is not None:
+                        if s.frame_handle is not None and not self.exporter.is_recording:
                             s.frame_handle.position = s.initial_pos
                             s.frame_handle.wxyz = s.initial_wxyz
                             s.update_gui_and_label()
@@ -283,10 +296,21 @@ class VL53L5CXViewer:
                     self.rec_status_text.value = "Recording..."
                     self.rec_button.label = "Stop Recording"
 
+                    # Disallow posture changing while recording (disable gizmo handles)
+                    for sensor in active_sensors:
+                        if sensor.frame_handle is not None:
+                            sensor.frame_handle.disable_axes = True
+                            sensor.frame_handle.disable_sliders = True
+                            sensor.frame_handle.disable_rotations = True
+                        if sensor.gui_gizmo_cb is not None:
+                            sensor.gui_gizmo_cb.disabled = True
+                        if sensor.gui_reset_btn is not None:
+                            sensor.gui_reset_btn.disabled = True
+
                     modal = server.gui.add_modal("Recording Started")
                     with modal:
                         server.gui.add_markdown(
-                            f"**Recording Started!**\n\nRecording sensor data for {len(active_sensors)} active sensor(s)."
+                            f"**Recording Started!**\n\nRecording sensor data for {len(active_sensors)} active sensor(s).\n\n*Note: Sensor posture controls are locked during recording.*"
                         )
                         ok_btn = server.gui.add_button("OK")
 
@@ -298,6 +322,23 @@ class VL53L5CXViewer:
                     saved_dir = self.exporter.stop_recording()
                     self.rec_status_text.value = "Not Recording"
                     self.rec_button.label = "Start Recording"
+
+                    # Restore posture controls and gizmo handles based on checkbox
+                    for sensor in self.sensor_manager.get_all_sensors():
+                        if sensor.gui_gizmo_cb is not None:
+                            sensor.gui_gizmo_cb.disabled = False
+                            if sensor.frame_handle is not None:
+                                enabled = sensor.gui_gizmo_cb.value
+                                sensor.frame_handle.disable_axes = not enabled
+                                sensor.frame_handle.disable_sliders = not enabled
+                                sensor.frame_handle.disable_rotations = not enabled
+                        elif sensor.frame_handle is not None:
+                            sensor.frame_handle.disable_axes = False
+                            sensor.frame_handle.disable_sliders = False
+                            sensor.frame_handle.disable_rotations = False
+
+                        if sensor.gui_reset_btn is not None:
+                            sensor.gui_reset_btn.disabled = False
 
                     if saved_dir:
                         modal = server.gui.add_modal("Recording Exported")

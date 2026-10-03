@@ -68,6 +68,8 @@ class VL53L5CXSensor:
         self.gui_pos_text = None
         self.gui_status_text = None
         self.gui_freq_text = None
+        self.gui_gizmo_cb = None
+        self.gui_reset_btn = None
 
     @property
     def id(self) -> int:
