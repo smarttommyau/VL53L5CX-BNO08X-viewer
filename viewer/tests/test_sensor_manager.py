@@ -138,36 +138,40 @@ class TestArgumentParsing:
         assert dev_cfg[1]["port"] == "/dev/ttyUSB0"
         assert dev_cfg[1]["sensor_count"] == 2
 
-    def test_parse_args_port_alias(self, monkeypatch):
-        """Should accept --port or -p as alias for device 1 port."""
+    def test_parse_args_wifi_device(self, monkeypatch):
+        """Should parse --device1 wifi and --IP1."""
         monkeypatch.setattr(
             sys,
             "argv",
-            ["viewer", "--device1", "port", "--port", "/dev/ttyACM0", "--sensor-count1", "3"],
+            ["viewer", "--device1", "wifi", "--IP1", "192.168.1.100", "--sensor-count1", "1"],
         )
         args, dev_cfg = parse_args()
 
-        assert dev_cfg[1]["device"] == "port"
-        assert dev_cfg[1]["port"] == "/dev/ttyACM0"
-        assert dev_cfg[1]["sensor_count"] == 3
+        assert dev_cfg[1]["device"] == "wifi"
+        assert dev_cfg[1]["ip"] == "192.168.1.100"
+        assert dev_cfg[1]["sensor_count"] == 1
 
-    def test_parse_args_multi_device(self, monkeypatch):
-        """Should parse multiple devices (--device1, --port1, --sensor-count1, --device2, --port2, --sensor-count2)."""
+    def test_parse_args_multi_device_mixed(self, monkeypatch):
+        """Should parse mixed wifi and port devices."""
         monkeypatch.setattr(
             sys,
             "argv",
             [
                 "viewer",
-                "--device1", "port",
-                "--port1", "/dev/ttyACM0",
+                "--device1", "wifi",
+                "--IP1", "192.168.1.50",
                 "--sensor-count1", "1",
                 "--device2", "port",
                 "--port2", "/dev/ttyACM1",
-                "--sensor-count2", "1",
+                "--sensor-count2", "2",
             ],
         )
         args, dev_cfg = parse_args()
 
         assert len(dev_cfg) == 2
-        assert dev_cfg[1] == {"device": "port", "port": "/dev/ttyACM0", "sensor_count": 1}
-        assert dev_cfg[2] == {"device": "port", "port": "/dev/ttyACM1", "sensor_count": 1}
+        assert dev_cfg[1]["device"] == "wifi"
+        assert dev_cfg[1]["ip"] == "192.168.1.50"
+        assert dev_cfg[1]["sensor_count"] == 1
+        assert dev_cfg[2]["device"] == "port"
+        assert dev_cfg[2]["port"] == "/dev/ttyACM1"
+        assert dev_cfg[2]["sensor_count"] == 2
