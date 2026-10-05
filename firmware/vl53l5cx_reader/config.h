@@ -11,6 +11,7 @@
 // #define WIFI_PASSWORD "your_wifi_password"
 
 // BLE Mode if defined, BLE will be used to send data to the viewer, otherwise USB will be used
+// Not Yet Supported, BLE is not yet implemented in the viewer, so this option is not available
 // #define BLE_MODE
 
 
