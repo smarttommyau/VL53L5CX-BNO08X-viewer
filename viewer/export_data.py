@@ -109,12 +109,13 @@ class DataExporter:
             conn_type = data["conn_type"]
             pos = data["position"]
             wxyz = data["wxyz"]
+            sanitized_device = device_name.replace("/", "-").replace(":", "-")
 
             # Filename formatting according to export_data/README.md
             if conn_type.lower() == "mmwave":
-                csv_filename = f"sensor_data.mmWave.{sensor_id}.csv"
+                csv_filename = f"{sanitized_device}_data.mmWave.csv"
             else:
-                csv_filename = f"sensor_data.VL53L5CX.{sensor_id}.csv"
+                csv_filename = f"{sanitized_device}_{sda}_data.VL53L5CX.{sensor_id}.csv"
 
             csv_filepath = export_dir / csv_filename
             rel_csv_path = f"./{self.timestamp_str}/{csv_filename}"
