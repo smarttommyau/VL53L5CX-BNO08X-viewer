@@ -23,17 +23,7 @@ def _yaw_to_wxyz(yaw_deg: float) -> tuple[float, float, float, float]:
 
 @dataclass
 class SceneHandles:
-    """Handles to the scene hierarchy.
-
-    Hierarchy:
-        /breadboard                     # Breadboard frame (world origin)
-            /breadboard/tof             # ToF board frame
-                /breadboard/tof/mesh    # Board mesh
-                /breadboard/tof/sensor  # Sensor origin frame (with yaw)
-                    /breadboard/tof/sensor/rays/ray_N  # Zone rays
-                    /breadboard/tof/sensor/points      # Point cloud
-                    /breadboard/tof/sensor/plane       # Fitted plane
-    """
+    """Handles to the scene hierarchy."""
 
     breadboard: viser.FrameHandle
     tof_board: viser.FrameHandle
@@ -113,16 +103,9 @@ def create_scene_hierarchy(
     assets_dir: Path,
     zone_angles: ZoneAngles,
 ) -> SceneHandles:
-    """Create the complete scene hierarchy.
-
-    The hierarchy flows: breadboard -> board -> sensor
-    Points and rays are children of the sensor frame, so they automatically
-    inherit the sensor's world transform.
-    """
-    # Breadboard frame at world origin
+    """Create the complete scene hierarchy."""
     breadboard = server.scene.add_frame("/breadboard", show_axes=False)
 
-    # ToF board frame (positioned at board center in world)
     tof_board_pos = tuple(
         np.array(config.TOF_BOARD.world_position) - np.array(config.TOF_BOARD.sensor_offset)
     )
@@ -137,7 +120,6 @@ def create_scene_hierarchy(
         board_config=config.TOF_BOARD,
         assets_dir=assets_dir,
     )
-    # ToF sensor frame (at sensor_offset from board center, with yaw correction)
     tof_sensor = server.scene.add_frame(
         "/breadboard/tof/sensor",
         show_axes=True,
@@ -147,7 +129,6 @@ def create_scene_hierarchy(
         wxyz=_yaw_to_wxyz(config.TOF_BOARD.sensor_yaw_deg),
     )
 
-    # Zone rays as children of ToF sensor (in sensor-local coordinates)
     zone_rays = _create_zone_rays(server, zone_angles)
 
     return SceneHandles(
@@ -197,40 +178,25 @@ def update_zone_rays(
     visible: bool = True,
     distances: np.ndarray | None = None,
 ) -> list:
-    """Update zone ray positions based on coordinate method.
-
-    Args:
-        server: Viser server instance.
-        zone_angles: Pre-computed zone angle data.
-        method: Coordinate transform method.
-        visible: Whether rays should be visible.
-        distances: Optional per-zone distances in mm. If provided, rays are clipped
-            to the measured distance instead of MAX_RANGE_MM.
-
-    Returns the new ray handles (the old ones become stale).
-    """
+    """Update zone ray positions based on coordinate method."""
     min_range = config.MIN_RANGE_MM / 1000
     max_range = config.MAX_RANGE_MM / 1000
 
     new_rays = []
     for i in range(config.NUM_ZONES):
         if method == CoordinateMethod.UNIFORM:
-            # Use tangent-based directions
             dir_x = zone_angles.tan_x[i]
             dir_y = zone_angles.tan_y[i]
             dir_z = 1.0
         else:
-            # Use ST lookup ray directions (already normalized)
             dir_x = zone_angles.st_ray_dir_x[i]
             dir_y = zone_angles.st_ray_dir_y[i]
             dir_z = zone_angles.st_ray_dir_z[i]
-            # Scale to match tangent-style (z=1 convention)
             if dir_z > 0:
                 dir_x = dir_x / dir_z
                 dir_y = dir_y / dir_z
                 dir_z = 1.0
 
-        # Use measured distance if provided and valid, otherwise max range
         if distances is not None and distances[i] >= config.MIN_RANGE_MM:
             end_range = distances[i] / 1000
         else:
@@ -267,18 +233,7 @@ def update_sensor_rays(
     visible: bool = True,
     distances: np.ndarray | None = None,
 ) -> list:
-    """Update zone ray positions for a specific sensor hierarchy path.
-
-    Args:
-        server: Viser server instance.
-        parent_path: Base hierarchy path for the sensor (e.g. "/sensor_1").
-        zone_angles: Pre-computed zone angle data.
-        method: Coordinate transform method.
-        visible: Whether rays should be visible.
-        distances: Optional per-zone distances in mm.
-
-    Returns the new ray handles.
-    """
+    """Update zone ray positions for a specific sensor hierarchy path."""
     min_range = config.MIN_RANGE_MM / 1000
     max_range = config.MAX_RANGE_MM / 1000
 
@@ -324,4 +279,3 @@ def update_sensor_rays(
         new_rays.append(ray)
 
     return new_rays
-

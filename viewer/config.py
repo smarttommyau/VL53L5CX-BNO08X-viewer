@@ -51,6 +51,17 @@ TOF_BOARD = BoardConfig(
     fallback_color=(0, 100, 0, 255),  # Green
 )
 
+# mmWave board: IWR6843AOPEVM
+MMWAVE_BOARD = BoardConfig(
+    world_position=(0.0, 0.0, 0.0),
+    sensor_offset=(0.0, 0.0, 0.0),
+    dimensions=(0.050, 0.050, 0.005),
+    texture="iwr6843aopevm.png",
+    sensor_yaw_deg=0.0,
+    is_atlas=False,
+    fallback_color=(0, 50, 150, 255),  # Blue
+)
+
 # Visualization settings
 TARGET_FPS = 30  # Target visualization frame rate
 FRAME_TIME = 1.0 / TARGET_FPS  # Time per frame in seconds

@@ -4,6 +4,7 @@ import argparse
 import csv
 import logging
 from pathlib import Path
+import re
 import sys
 import time
 
@@ -12,8 +13,13 @@ import viser
 
 from viewer import config
 from viewer.geometry import CoordinateMethod, compute_zone_angles
+from viewer.iwr6843aopevm_sensor import IWR6843AOPEVMSensor
 from viewer.logging_config import setup_logging
-from viewer.scene import _create_board_mesh, create_grid, update_sensor_rays
+from viewer.scene import (
+    _create_board_mesh,
+    create_grid,
+    update_sensor_rays,
+)
 from viewer.sensor_manager import SensorManager
 
 logger = logging.getLogger("vl53l5cx_viewer.player")
@@ -53,13 +59,37 @@ def load_recording(export_dir: Path) -> list[dict]:
         if csv_file.exists():
             with open(csv_file, "r", encoding="utf-8") as f:
                 reader = csv.reader(f)
-                header = next(reader, None)  # Skip Timestamp,Distance,Status header
-                for row in reader:
-                    if len(row) >= 3:
-                        ts = int(row[0])
-                        dists = np.array([float(x) for x in row[1].split(";")], dtype=np.float32)
-                        stats = np.array([int(x) for x in row[2].split(";")], dtype=np.uint8)
-                        packets.append((ts, dists, stats))
+                header = next(reader, None)  # Skip header
+                if conn_type.lower() == "mmwave":
+                    for row in reader:
+                        if len(row) >= 2:
+                            ts = int(row[0])
+                            dp_str = row[1]
+                            matches = re.findall(
+                                r"\(([-0-9.]+);([-0-9.]+);([-0-9.]+)\)", dp_str
+                            )
+                            if matches:
+                                pts = np.array(
+                                    [
+                                        [float(m[0]), float(m[1]), float(m[2])]
+                                        for m in matches
+                                    ],
+                                    dtype=np.float32,
+                                )
+                            else:
+                                pts = np.empty((0, 3), dtype=np.float32)
+                            packets.append((ts, pts))
+                else:
+                    for row in reader:
+                        if len(row) >= 3:
+                            ts = int(row[0])
+                            dists = np.array(
+                                [float(x) for x in row[1].split(";")], dtype=np.float32
+                            )
+                            stats = np.array(
+                                [int(x) for x in row[2].split(";")], dtype=np.uint8
+                            )
+                            packets.append((ts, dists, stats))
 
         sensors_info.append({
             "name": s_name,
@@ -125,32 +155,37 @@ class RecordedPlayer:
             )
 
             # Board mesh
+            board_cfg = (
+                config.MMWAVE_BOARD
+                if getattr(sensor, "deviceType", "").lower() == "mmwave"
+                else config.TOF_BOARD
+            )
             sensor.mesh_handle = _create_board_mesh(
                 server,
                 scene_path=f"{sensor.hierarchy_path}/mesh",
-                board_config=config.TOF_BOARD,
+                board_config=board_cfg,
                 assets_dir=assets_dir,
             )
 
             # 3D Label
-            sda_str = str(sensor.sda) if sensor.sda is not None else "Pending..."
-            label_text = (
-                f"Sensor {sensor.id}\nDevice: {sensor.deviceName}\nSDA: {sda_str}"
-            )
+            sda_str = str(sensor.sda) if sensor.sda is not None else "N/A"
+            type_str = "mmWave" if getattr(sensor, "deviceType", "").lower() == "mmwave" else "VL53"
+            label_text = f"Sensor {sensor.id} ({type_str})\nDevice: {sensor.deviceName}\nSDA: {sda_str}"
             sensor.label_handle = server.scene.add_label(
                 f"{sensor.hierarchy_path}/label",
                 text=label_text,
                 position=(0.0, -0.015, 0.025),
             )
 
-            # Zone rays
-            sensor.rays_handles = update_sensor_rays(
-                server,
-                sensor.hierarchy_path,
-                self.zone_angles,
-                CoordinateMethod.UNIFORM,
-                visible=True,
-            )
+            # Zone rays (only for VL53)
+            if getattr(sensor, "deviceType", "").lower() != "mmwave":
+                sensor.rays_handles = update_sensor_rays(
+                    server,
+                    sensor.hierarchy_path,
+                    self.zone_angles,
+                    CoordinateMethod.UNIFORM,
+                    visible=True,
+                )
 
     def _setup_gui(self, server: viser.ViserServer):
         """Setup playback controls and sensor info GUI folders."""
@@ -189,9 +224,21 @@ class RecordedPlayer:
             def _on_loop_change(e):
                 self.loop_playback = self.loop_cb.value
 
+        with server.gui.add_folder("Settings"):
+            self.show_fov_cb = server.gui.add_checkbox(
+                "Show Boundary Lines (FoV)", initial_value=True
+            )
+
+            @self.show_fov_cb.on_update
+            def _on_show_fov_toggle(e):
+                for sensor in self.sensor_manager.get_all_sensors():
+                    if hasattr(sensor, "boundary_handles") and sensor.boundary_handles:
+                        for line in sensor.boundary_handles:
+                            line.visible = self.show_fov_cb.value
+
         with server.gui.add_folder("Sensors Info"):
             for sensor in self.sensor_manager.get_all_sensors():
-                sda_str = str(sensor.sda) if sensor.sda is not None else "Pending..."
+                sda_str = str(sensor.sda) if sensor.sda is not None else "N/A"
                 with server.gui.add_folder(f"Sensor {sensor.id}") as folder:
                     sensor.gui_folder = folder
                     sensor.gui_device_text = server.gui.add_text(
@@ -259,12 +306,17 @@ class RecordedPlayer:
                     closest_pkt = min(
                         packets, key=lambda p: abs(p[0] - self.current_time_ms)
                     )
-                    _, distances, status = closest_pkt
 
                     dev_name = info["name"].rsplit("_", 1)[0]
                     sensor = self.sensor_manager.get_sensor(dev_name)
                     if sensor:
-                        sensor.update_data(distances, status)
+                        if isinstance(sensor, IWR6843AOPEVMSensor) or getattr(sensor, "deviceType", "").lower() == "mmwave":
+                            _, points_3d = closest_pkt
+                            sensor.update_data(points_3d=points_3d)
+                        else:
+                            _, distances, status = closest_pkt
+                            sensor.update_data(distances=distances, status=status)
+
                         points_local, colors = sensor.get_display_data(
                             self.zone_angles, CoordinateMethod.UNIFORM
                         )
@@ -289,7 +341,7 @@ class RecordedPlayer:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="VL53L5CX Recording Player")
+    parser = argparse.ArgumentParser(description="VL53L5CX / mmWave Recording Player")
     parser.add_argument(
         "export_dir",
         type=str,

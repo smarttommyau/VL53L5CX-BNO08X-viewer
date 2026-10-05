@@ -38,13 +38,16 @@ class DataExporter:
                 pos = sensor.initial_pos
                 wxyz = sensor.initial_wxyz
 
-            conn_type = (
-                "WiFi"
-                if getattr(sensor, "deviceType", "port").lower() == "wifi"
-                else "Serial"
-            )
-
-            sda_val = sensor.sda if sensor.sda is not None else 0
+            dev_type = getattr(sensor, "deviceType", "port").lower()
+            if dev_type == "mmwave":
+                conn_type = "mmwave"
+                sda_val = 0
+            elif dev_type == "wifi":
+                conn_type = "WiFi"
+                sda_val = sensor.sda if sensor.sda is not None else 0
+            else:
+                conn_type = "Serial"
+                sda_val = sensor.sda if sensor.sda is not None else 0
 
             self.records[sensor.id] = {
                 "sensor": sensor,
@@ -54,7 +57,7 @@ class DataExporter:
                 "sda": sda_val,
                 "position": pos,
                 "wxyz": wxyz,  # (w, x, y, z)
-                "packets": [],  # list of (timestamp_ms, distances, status)
+                "packets": [],  # list of packets
             }
 
         logger.info(
@@ -64,19 +67,28 @@ class DataExporter:
         )
 
     def record_packet(
-        self, sensor_id: int, distances: np.ndarray, status: np.ndarray
+        self,
+        sensor_id: int,
+        data1: np.ndarray,
+        distances: Optional[np.ndarray] = None,
+        status: Optional[np.ndarray] = None,
     ):
         """Record a single packet for a sensor if recording is active."""
         if not self.is_recording or sensor_id not in self.records:
             return
 
         timestamp_ms = int((time.time() - self.start_time) * 1000)
-        self.records[sensor_id]["packets"].append(
-            (timestamp_ms, distances.copy(), status.copy())
-        )
+        rec = self.records[sensor_id]
+
+        if rec["conn_type"] == "mmwave":
+            rec["packets"].append((timestamp_ms, data1.copy()))
+        else:
+            rec["packets"].append(
+                (timestamp_ms, data1.copy(), distances.copy() if distances is not None else status.copy())
+            )
 
     def stop_recording(self) -> Optional[Path]:
-        """Stop recording and write metadata and CSV data files.
+        """Stop recording and write metadata and CSV data files according to export_data/README.md.
 
         Returns:
             Path to the output directory where files were saved, or None if not recording.
@@ -98,20 +110,29 @@ class DataExporter:
             pos = data["position"]
             wxyz = data["wxyz"]
 
-            # Sanitize device name for safe CSV filename
-            sanitized_device = device_name.replace("/", "-").replace(":", "-")
-            csv_filename = f"{sanitized_device}_{sda}_data.csv"
+            # Filename formatting according to export_data/README.md
+            if conn_type.lower() == "mmwave":
+                csv_filename = f"sensor_data.mmWave.{sensor_id}.csv"
+            else:
+                csv_filename = f"sensor_data.VL53L5CX.{sensor_id}.csv"
+
             csv_filepath = export_dir / csv_filename
             rel_csv_path = f"./{self.timestamp_str}/{csv_filename}"
 
             # Write sensor CSV file
             with open(csv_filepath, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow(["Timestamp", "Distance", "Status"])
-                for ts_ms, dists, stats in data["packets"]:
-                    dist_str = ";".join(str(int(d)) for d in dists)
-                    stat_str = ";".join(str(int(s)) for s in stats)
-                    writer.writerow([ts_ms, dist_str, stat_str])
+                if conn_type.lower() == "mmwave":
+                    writer.writerow(["Timestamp", "DataPoints"])
+                    for ts_ms, pts in data["packets"]:
+                        dp_str = "".join(f"({p[0]:.2f};{p[1]:.2f};{p[2]:.2f})" for p in pts)
+                        writer.writerow([ts_ms, dp_str])
+                else:
+                    writer.writerow(["Timestamp", "Distance", "Status"])
+                    for ts_ms, dists, stats in data["packets"]:
+                        dist_str = ";".join(str(int(d)) for d in dists)
+                        stat_str = ";".join(str(int(s)) for s in stats)
+                        writer.writerow([ts_ms, dist_str, stat_str])
 
             # Metadata format (quaternion order x, y, z, w)
             rot_x, rot_y, rot_z, rot_w = wxyz[1], wxyz[2], wxyz[3], wxyz[0]
