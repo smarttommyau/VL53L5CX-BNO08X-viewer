@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VL53L5CX Point Cloud Viewer - Main application."""
+"""VL53L5CX and mmWave Point Cloud Viewer - Main application."""
 
 import argparse
 import logging
@@ -23,6 +23,7 @@ from .geometry import (
     get_colors,
 )
 from .logging_config import setup_logging
+from .mmwave_reader import MMWaveReader
 from .network_reader import NetworkReader
 from .scene import (
     _create_board_mesh,
@@ -101,7 +102,7 @@ def voxel_downsample(
 
 
 class VL53L5CXViewer:
-    """Real-time point cloud viewer for VL53L5CX ToF sensors."""
+    """Real-time point cloud viewer for VL53L5CX ToF and IWR6843 mmWave sensors."""
 
     def __init__(self, devices_config: dict[int, dict], baud: int = 115200):
         self.baud = baud
@@ -117,7 +118,27 @@ class VL53L5CXViewer:
             dev_type = dev.get("device", "port").lower()
             sensor_count = dev.get("sensor_count", 1)
 
-            if dev_type == "wifi":
+            if dev_type == "mmwave":
+                cfg_port = dev.get("cfg_port", "/dev/ttyUSB0")
+                data_port = dev.get("data_port", "/dev/ttyUSB1")
+                cfg_file = dev.get("cfg_file", "sensor_profile/iwr6843AOP_example.cfg")
+                device_name = f"{cfg_port}_{data_port}"
+
+                self.sensor_manager.add_device(
+                    deviceName=device_name,
+                    sensor_count=sensor_count,
+                    deviceType="mmwave",
+                    cfg_file=cfg_file,
+                    cfg_port=cfg_port,
+                    data_port=data_port,
+                )
+                if device_name not in self.data_readers:
+                    self.data_readers[device_name] = MMWaveReader(
+                        cfg_port=cfg_port,
+                        data_port=data_port,
+                        cfg_file=cfg_file,
+                    )
+            elif dev_type == "wifi":
                 ip = dev.get("ip", "192.168.1.100")
                 net_port = dev.get("telnet_port", 2340)
                 device_name = ip
@@ -145,15 +166,21 @@ class VL53L5CXViewer:
     def _initialize_sensor_viser(
         self,
         server: viser.ViserServer,
-        sensor: VL53L5CXSensor,
+        sensor,
         index: int,
         total_count: int,
     ):
         """Initialize Viser 3D scene elements and interactive transform controls for a sensor."""
-        spacing = getattr(config, "SENSOR_SPACING_M", 0.08)
+        spacing = getattr(config, "SENSOR_SPACING_M", 2.0)
         x_offset = (index - (total_count - 1) / 2.0) * spacing
         sensor.initial_pos = (x_offset, 0.0, 0.0)
-        sensor.initial_wxyz = _yaw_to_wxyz(config.TOF_BOARD.sensor_yaw_deg)
+
+        yaw_deg = (
+            0.0
+            if getattr(sensor, "deviceType", "").lower() == "mmwave"
+            else config.TOF_BOARD.sensor_yaw_deg
+        )
+        sensor.initial_wxyz = _yaw_to_wxyz(yaw_deg)
 
         # Interactive 3D Transform Controls frame allowing position dragging and rotation
         sensor.frame_handle = server.scene.add_transform_controls(
@@ -169,60 +196,75 @@ class VL53L5CXViewer:
         ) -> None:
             s.update_gui_and_label()
 
-        # Board mesh under sensor frame
+        # Board mesh under sensor frame (using iwr6843aopevm.png texture for mmWave)
         assets_dir = Path(__file__).parent.parent / "assets"
+        board_cfg = (
+            config.MMWAVE_BOARD
+            if getattr(sensor, "deviceType", "").lower() == "mmwave"
+            else config.TOF_BOARD
+        )
         sensor.mesh_handle = _create_board_mesh(
             server,
             scene_path=f"{sensor.hierarchy_path}/mesh",
-            board_config=config.TOF_BOARD,
+            board_config=board_cfg,
             assets_dir=assets_dir,
         )
 
         # 3D Label above sensor
-        sda_str = str(sensor.sda) if sensor.sda is not None else "Pending..."
-        label_text = (
-            f"Sensor {sensor.id}\nDevice: {sensor.deviceName}\nSDA: {sda_str}"
-        )
+        if getattr(sensor, "deviceType", "").lower() == "mmwave":
+            cfg_name = Path(getattr(sensor, "cfg_file", "")).name
+            label_text = f"Sensor {sensor.id} (mmWave)\nDevice: {sensor.deviceName}\nCFG: {cfg_name}"
+        else:
+            sda_str = str(sensor.sda) if sensor.sda is not None else "Pending..."
+            label_text = f"Sensor {sensor.id}\nDevice: {sensor.deviceName}\nSDA: {sda_str}"
+
         sensor.label_handle = server.scene.add_label(
             f"{sensor.hierarchy_path}/label",
             text=label_text,
             position=(0.0, -0.015, 0.025),
         )
 
-        # Initial zone rays
-        coord_method = CoordinateMethod.UNIFORM
-        if hasattr(self, "coord_method_dropdown"):
-            coord_method = next(
-                m
-                for m in CoordinateMethod
-                if m.value == self.coord_method_dropdown.value
-            )
+        # Initial zone rays (for VL53 sensors)
+        if getattr(sensor, "deviceType", "").lower() != "mmwave":
+            coord_method = CoordinateMethod.UNIFORM
+            if hasattr(self, "coord_method_dropdown"):
+                coord_method = next(
+                    m
+                    for m in CoordinateMethod
+                    if m.value == self.coord_method_dropdown.value
+                )
 
-        show_rays = (
-            self.show_rays_checkbox.value
-            if hasattr(self, "show_rays_checkbox")
-            else True
-        )
-        sensor.rays_handles = update_sensor_rays(
-            server,
-            sensor.hierarchy_path,
-            self.zone_angles,
-            coord_method,
-            visible=show_rays,
-        )
+            show_rays = (
+                self.show_rays_checkbox.value
+                if hasattr(self, "show_rays_checkbox")
+                else True
+            )
+            sensor.rays_handles = update_sensor_rays(
+                server,
+                sensor.hierarchy_path,
+                self.zone_angles,
+                coord_method,
+                visible=show_rays,
+            )
 
         # Sidebar GUI folder (if dynamically created)
         if sensor.gui_folder is None:
-            sda_str = str(sensor.sda) if sensor.sda is not None else "Pending..."
             with server.gui.add_folder("Sensors Info"):
                 with server.gui.add_folder(f"Sensor {sensor.id}") as folder:
                     sensor.gui_folder = folder
                     sensor.gui_device_text = server.gui.add_text(
                         "DeviceName", initial_value=sensor.deviceName, disabled=True
                     )
-                    sensor.gui_sda_text = server.gui.add_text(
-                        "SDA", initial_value=sda_str, disabled=True
-                    )
+                    if getattr(sensor, "deviceType", "").lower() == "mmwave":
+                        sensor.gui_cfg_text = server.gui.add_text(
+                            "Config", initial_value=Path(sensor.cfg_file).name, disabled=True
+                        )
+                    else:
+                        sda_str = str(sensor.sda) if sensor.sda is not None else "Pending..."
+                        sensor.gui_sda_text = server.gui.add_text(
+                            "SDA", initial_value=sda_str, disabled=True
+                        )
+
                     sensor.gui_pos_text = server.gui.add_text(
                         "Position (m)",
                         initial_value=f"X: {sensor.initial_pos[0]:.2f}, Y: {sensor.initial_pos[1]:.2f}, Z: {sensor.initial_pos[2]:.2f}",
@@ -341,7 +383,7 @@ class VL53L5CXViewer:
                             sensor.gui_reset_btn.disabled = False
 
                     if saved_dir:
-                        modal = server.gui.add_modal("Recording Exported")
+                        modal = server.gui.add_modal("Recording Saved")
                         with modal:
                             server.gui.add_markdown(
                                 f"**Recording Saved Successfully!**\n\n**Export Location:**\n`{saved_dir.resolve()}`"
@@ -376,13 +418,14 @@ class VL53L5CXViewer:
                         if m.value == self.coord_method_dropdown.value
                     )
                     for sensor in self.sensor_manager.get_all_sensors():
-                        sensor.rays_handles = update_sensor_rays(
-                            server,
-                            sensor.hierarchy_path,
-                            self.zone_angles,
-                            method,
-                            visible=self.show_rays_checkbox.value,
-                        )
+                        if getattr(sensor, "deviceType", "").lower() != "mmwave":
+                            sensor.rays_handles = update_sensor_rays(
+                                server,
+                                sensor.hierarchy_path,
+                                self.zone_angles,
+                                method,
+                                visible=self.show_rays_checkbox.value,
+                            )
 
             server.gui.add_markdown("---")
             self.coord_method_dropdown = server.gui.add_dropdown(
@@ -399,13 +442,14 @@ class VL53L5CXViewer:
                     if m.value == self.coord_method_dropdown.value
                 )
                 for sensor in self.sensor_manager.get_all_sensors():
-                    sensor.rays_handles = update_sensor_rays(
-                        server,
-                        sensor.hierarchy_path,
-                        self.zone_angles,
-                        method,
-                        visible=self.show_rays_checkbox.value,
-                    )
+                    if getattr(sensor, "deviceType", "").lower() != "mmwave":
+                        sensor.rays_handles = update_sensor_rays(
+                            server,
+                            sensor.hierarchy_path,
+                            self.zone_angles,
+                            method,
+                            visible=self.show_rays_checkbox.value,
+                        )
 
             server.gui.add_markdown("---")
             self.filter_checkbox = server.gui.add_checkbox(
@@ -505,16 +549,24 @@ class VL53L5CXViewer:
             if m.value == self.coord_method_dropdown.value
         )
 
-        # Collect pending packets from all data readers (serial and network)
+        # Collect pending packets from all data readers (serial, network, mmwave)
         for reader_id, reader in self.data_readers.items():
             packets = reader.get_pending_packets()
-            for dev_name, distances, status, sda in packets:
-                sensor, newly_assigned = self.sensor_manager.process_packet(
-                    dev_name, distances, status, sda
-                )
-
-                if self.exporter.is_recording:
-                    self.exporter.record_packet(sensor.id, distances, status)
+            for packet in packets:
+                if isinstance(reader, MMWaveReader):
+                    dev_name, points_3d, dists_mm, status_arr, _ = packet
+                    sensor, newly_assigned = self.sensor_manager.process_packet(
+                        dev_name, points_3d
+                    )
+                    if self.exporter.is_recording:
+                        self.exporter.record_packet(sensor.id, points_3d)
+                else:  # ToF (SerialReader or NetworkReader)
+                    dev_name, distances, status, sda = packet
+                    sensor, newly_assigned = self.sensor_manager.process_packet(
+                        dev_name, distances, status, None, sda
+                    )
+                    if self.exporter.is_recording:
+                        self.exporter.record_packet(sensor.id, distances, status)
 
                 if sensor.frame_handle is None:
                     all_sensors = self.sensor_manager.get_all_sensors()
@@ -525,11 +577,6 @@ class VL53L5CXViewer:
                     )
                     self._initialize_sensor_viser(
                         server, sensor, idx, len(all_sensors)
-                    )
-
-                if self.filter_checkbox.value:
-                    distances = sensor.temporal_filter.apply(
-                        distances, self.filter_strength_slider.value
                     )
 
                 # Convert sensor measurements to local points
@@ -544,7 +591,7 @@ class VL53L5CXViewer:
                             sensor_pos = np.array(sensor.frame_handle.position)
                             sensor_wxyz = sensor.frame_handle.wxyz
                         else:
-                            spacing = getattr(config, "SENSOR_SPACING_M", 0.08)
+                            spacing = getattr(config, "SENSOR_SPACING_M", 2.0)
                             all_sensors = self.sensor_manager.get_all_sensors()
                             idx = (
                                 all_sensors.index(sensor)
@@ -553,7 +600,11 @@ class VL53L5CXViewer:
                             )
                             x_offset = (idx - (len(all_sensors) - 1) / 2.0) * spacing
                             sensor_pos = np.array([x_offset, 0.0, 0.0])
-                            sensor_wxyz = _yaw_to_wxyz(config.TOF_BOARD.sensor_yaw_deg)
+                            sensor_wxyz = _yaw_to_wxyz(
+                                0.0
+                                if getattr(sensor, "deviceType", "").lower() == "mmwave"
+                                else config.TOF_BOARD.sensor_yaw_deg
+                            )
 
                         sensor_rot = Rotation.from_quat([
                             sensor_wxyz[1],
@@ -562,9 +613,15 @@ class VL53L5CXViewer:
                             sensor_wxyz[0],
                         ])
 
+                        board_pos = (
+                            config.MMWAVE_BOARD.world_position
+                            if getattr(sensor, "deviceType", "").lower() == "mmwave"
+                            else config.TOF_BOARD.world_position
+                        )
+
                         world_points = (
                             sensor_rot.apply(points_local)
-                            + np.array(config.TOF_BOARD.world_position)
+                            + np.array(board_pos)
                             + sensor_pos
                         )
                         mapping_state.add(world_points, colors)
@@ -602,7 +659,11 @@ class VL53L5CXViewer:
                         )
 
                     # Plane fitting per sensor
-                    if self.fit_plane_checkbox.value and len(points_local) >= 3:
+                    if (
+                        self.fit_plane_checkbox.value
+                        and len(points_local) >= 3
+                        and getattr(sensor, "deviceType", "").lower() != "mmwave"
+                    ):
                         if self.plane_method_dropdown.value == "RANSAC":
                             threshold_m = (
                                 self.ransac_threshold_slider.value / 1000.0
@@ -625,19 +686,20 @@ class VL53L5CXViewer:
                                 opacity=0.5,
                             )
 
-                # Update zone rays for sensor
-                if self.show_rays_checkbox.value and self.clip_rays_checkbox.value:
-                    sensor.rays_handles = update_sensor_rays(
-                        server,
-                        sensor.hierarchy_path,
-                        self.zone_angles,
-                        coord_method,
-                        visible=True,
-                        distances=distances,
-                    )
-                else:
-                    for ray in sensor.rays_handles:
-                        ray.visible = self.show_rays_checkbox.value
+                # Update zone rays for sensor (if VL53)
+                if getattr(sensor, "deviceType", "").lower() != "mmwave":
+                    if self.show_rays_checkbox.value and self.clip_rays_checkbox.value:
+                        sensor.rays_handles = update_sensor_rays(
+                            server,
+                            sensor.hierarchy_path,
+                            self.zone_angles,
+                            coord_method,
+                            visible=True,
+                            distances=sensor.distances,
+                        )
+                    else:
+                        for ray in sensor.rays_handles:
+                            ray.visible = self.show_rays_checkbox.value
 
                 # Update GUI text fields and 3D scene label for this sensor
                 sensor.update_gui_and_label()
@@ -687,8 +749,8 @@ class VL53L5CXViewer:
 
 
 def parse_args():
-    """Parse command line arguments supporting multiple devices (--deviceX, --portX, --IPX, --sensor-countX)."""
-    parser = argparse.ArgumentParser(description="VL53L5CX Point Cloud Viewer")
+    """Parse command line arguments supporting multiple devices (--deviceX, --portX, --IPX, --CFG_portX, --DATA_portX, --ConfigX, --sensor-countX)."""
+    parser = argparse.ArgumentParser(description="VL53L5CX and mmWave Point Cloud Viewer")
 
     parser.add_argument(
         "--port",
@@ -703,6 +765,27 @@ def parse_args():
         dest="ip_alias",
         default=None,
         help="Fallback IP address for WiFi device 1",
+    )
+    parser.add_argument(
+        "--CFG_port",
+        "--cfg_port",
+        dest="cfg_port_alias",
+        default="/dev/ttyUSB0",
+        help="Fallback CLI config port for mmWave device 1",
+    )
+    parser.add_argument(
+        "--DATA_port",
+        "--data_port",
+        dest="data_port_alias",
+        default="/dev/ttyUSB1",
+        help="Fallback data payload port for mmWave device 1",
+    )
+    parser.add_argument(
+        "--Config",
+        "--config",
+        dest="cfg_file_alias",
+        default="sensor_profile/iwr6843AOP_example.cfg",
+        help="Fallback profile config file for mmWave device 1",
     )
     parser.add_argument(
         "--baud", "-b", type=int, default=115200, help="Baud rate (default: 115200)"
@@ -728,6 +811,9 @@ def parse_args():
                 "port": "/dev/cu.usbserial-0001",
                 "ip": "192.168.1.100",
                 "telnet_port": 2340,
+                "cfg_port": args.cfg_port_alias,
+                "data_port": args.data_port_alias,
+                "cfg_file": args.cfg_file_alias,
                 "sensor_count": 1,
             }
         return devices_config[idx]
@@ -772,6 +858,51 @@ def parse_args():
                 entry = get_device_entry(idx)
                 entry["ip"] = val
                 entry["device"] = "wifi"
+            i += 1
+            continue
+
+        m_cfg = re.match(r"^--cfg_?port(\d+)(?:=(.*))?$", token, re.IGNORECASE)
+        if m_cfg:
+            idx = int(m_cfg.group(1))
+            val = m_cfg.group(2)
+            if val is None and i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+                val = tokens[i + 1]
+                i += 1
+            if val:
+                entry = get_device_entry(idx)
+                entry["cfg_port"] = val
+                if entry.get("device") == "port":
+                    entry["device"] = "mmwave"
+            i += 1
+            continue
+
+        m_data = re.match(r"^--data_?port(\d+)(?:=(.*))?$", token, re.IGNORECASE)
+        if m_data:
+            idx = int(m_data.group(1))
+            val = m_data.group(2)
+            if val is None and i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+                val = tokens[i + 1]
+                i += 1
+            if val:
+                entry = get_device_entry(idx)
+                entry["data_port"] = val
+                if entry.get("device") == "port":
+                    entry["device"] = "mmwave"
+            i += 1
+            continue
+
+        m_cfgfile = re.match(r"^--config(\d+)(?:=(.*))?$", token, re.IGNORECASE)
+        if m_cfgfile:
+            idx = int(m_cfgfile.group(1))
+            val = m_cfgfile.group(2)
+            if val is None and i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+                val = tokens[i + 1]
+                i += 1
+            if val:
+                entry = get_device_entry(idx)
+                entry["cfg_file"] = val
+                if entry.get("device") == "port":
+                    entry["device"] = "mmwave"
             i += 1
             continue
 

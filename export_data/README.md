@@ -3,7 +3,10 @@
 ## File format
 2 type of files are generated when exporting data from the sensor:
 1. Sensors meta data file: `sensors_meta_data.txt`
-2. Sensor data file: `sensor_data.csv`
+2. Sensor data file: 
+   1.  2 type of sensor data files are generated based on the type of sensor:
+       1.  For VL53L5CX sensor: `sensor_data.VL53L5CX.csv`
+       2.  For mmWave sensor: `sensor_data.mmWave.csv`
 
 ### Sensor meta data file
 It includes the following information:
@@ -44,10 +47,22 @@ It includes the following information:
 - status: the status from sensor(Array seperated by ;)
   - E.g. 5;5;5;5;5;5;5;5;5;5...
   - 	/* Status indicating the measurement validity (5 & 9 means ranging OK)*/
-Example content of `sensor_data.csv`:
+Example content of `sensor_data.VL53L5CX.csv`:
 ```
 Timestamp,Distance,Status
 0,100;200;300;400;500;600;700;800;900;1000,5;5;5;5;5;5;5;5;5;5
 10,110;210;310;410;510;610;710;810;910;1010,5;5;5;5;5;5;5;5;
 ````
 > Note: In real case the distance and status array should be 64 elements long, but for the sake of example, we have shortened it to 10 elements.
+
+### Sensor data 2 for mmWave sensor
+It includes the following information:
+- Timestamp: The timestamp of the data point in milliseconds since start of record
+- DataPoints : (x1;y1;z1);(x2;y2;z2);(x3;y3;z3);...;(xn;yn;zn)
+  - E.g. (100;200;300);(400;500;600);(700;800;900);...
+Example content of `sensor_data.mmWave.csv`:
+```
+Timestamp,DataPoints
+0,(100;200;300);(400;500;600);(700;800;900);(1000;1100;1200);(1300;1400;1500);(1600;1700;1800);
+10,(110;210;310);(410;510;610);(710;810;910);(1010;1110;1210);(1310;1410;1510);(1610;1710;1810);
+```

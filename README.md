@@ -70,8 +70,8 @@ python -m viewer --device1 port --port1 /dev/ttyACM0 --sensor-count1 2
 # WiFi Telnet device (connecting to telnet port 2340):
 python -m viewer --device1 wifi --IP1 192.168.1.100 --sensor-count1 1
 
-# Mixed devices (1 WiFi and 1 USB serial port):
-python -m viewer --device1 wifi --IP1 192.168.1.100 --sensor-count1 1 --device2 port --port2 /dev/ttyACM1 --sensor-count2 1
+# TI mmWave Radar device (IWR6843AOPEVM):
+python -m viewer --device1 mmwave --CFG_port1 /dev/ttyUSB0 --DATA_port1 /dev/ttyUSB1 --Config1 sensor_profile/iwr6843AOP_example.cfg
 
 # Replay recorded data:
 python -m player export_data/2026-10-04_15-30-00/
@@ -80,10 +80,13 @@ python -m player export_data/2026-10-04_15-30-00/
 Open http://localhost:8080 in your browser.
 
 **Options:**
-- `--deviceX`: Device type for device X (`port` or `wifi`, default: `port`)
+- `--deviceX`: Device type for device X (`port`, `wifi`, or `mmwave`, default: `port`)
 - `--portX`, `--port`, `-p`: Serial port path for USB device X (default: `/dev/cu.usbserial-0001`)
 - `--IPX`, `--ipX`, `--IP`: IP address for WiFi device X (connects via Telnet on port `2340`)
-- `--sensor-countX`: Number of VL53 sensors expected on device X (default: `1`)
+- `--CFG_portX`: CLI configuration port for mmWave device X (baud 115200, default: `/dev/ttyUSB0`)
+- `--DATA_portX`: Data payload port for mmWave device X (baud 921600, default: `/dev/ttyUSB1`)
+- `--ConfigX`: Profile config file for mmWave device X (default: `sensor_profile/iwr6843AOP_example.cfg`)
+- `--sensor-countX`: Number of sensors expected on device X (default: `1`)
 - `--baud`, `-b`: Baud rate for serial devices (default: `115200`)
 - `--viser-port`: Viser server port (default: `8080`)
 - `--debug`: Enable verbose logging
