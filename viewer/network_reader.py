@@ -40,6 +40,9 @@ class NetworkReader:
 
         self._thread: Optional[threading.Thread] = None
 
+        self._version_checked = False
+
+
     @property
     def data_fps(self) -> float:
         """Current data frame rate from network socket."""
@@ -168,6 +171,22 @@ class NetworkReader:
                                     )
                                     continue
 
+                                # Check version (warn once)
+                                if not self._version_checked:
+                                    self._version_checked = True
+                                    firmware_version = data.get("v")
+                                    if firmware_version is None:
+                                        logger.warning(
+                                            "No version in data. Firmware may be outdated."
+                                        )
+                                    elif firmware_version != config.VERSION:
+                                        logger.warning(
+                                            "Version mismatch: firmware=%s, viewer=%s.",
+                                            firmware_version,
+                                            config.VERSION,
+                                        )
+
+                                
                                 distances_arr = np.array(distances, dtype=np.float32)
                                 status_arr = np.array(status, dtype=np.uint8)
 
