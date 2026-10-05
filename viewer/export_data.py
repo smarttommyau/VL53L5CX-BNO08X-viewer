@@ -131,8 +131,8 @@ class DataExporter:
                 else:
                     writer.writerow(["Timestamp", "Distance", "Status"])
                     for ts_ms, dists, stats in data["packets"]:
-                        dist_str = ";".join(str(int(d)) for d in dists)
-                        stat_str = ";".join(str(int(s)) for s in stats)
+                        dist_str = ";".join(dists.astype(str))
+                        stat_str = ";".join(stats.astype(str))
                         writer.writerow([ts_ms, dist_str, stat_str])
 
             # Metadata format (quaternion order x, y, z, w)
