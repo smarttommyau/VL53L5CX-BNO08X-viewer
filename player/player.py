@@ -218,17 +218,6 @@ class RecordedPlayer:
             def _on_loop_change(e):
                 self.loop_playback = self.loop_cb.value
 
-        with server.gui.add_folder("Settings"):
-            self.show_fov_cb = server.gui.add_checkbox(
-                "Show Boundary Lines (FoV)", initial_value=True
-            )
-
-            @self.show_fov_cb.on_update
-            def _on_show_fov_toggle(e):
-                for sensor in self.sensor_manager.get_all_sensors():
-                    if hasattr(sensor, "boundary_handles") and sensor.boundary_handles:
-                        for line in sensor.boundary_handles:
-                            line.visible = self.show_fov_cb.value
 
         with server.gui.add_folder("Sensors Info"):
             for sensor in self.sensor_manager.get_all_sensors():

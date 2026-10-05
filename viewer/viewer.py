@@ -19,8 +19,6 @@ from .filters import fit_plane, fit_plane_ransac
 from .geometry import (
     CoordinateMethod,
     compute_zone_angles,
-    distances_to_points,
-    get_colors,
 )
 from .logging_config import setup_logging
 from .mmwave_reader import MMWaveReader
