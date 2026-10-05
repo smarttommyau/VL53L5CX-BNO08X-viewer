@@ -52,8 +52,10 @@ Example content of `sensor_data.VL53L5CX.csv`:
 Timestamp,Distance,Status
 0,100;200;300;400;500;600;700;800;900;1000,5;5;5;5;5;5;5;5;5;5
 10,110;210;310;410;510;610;710;810;910;1010,5;5;5;5;5;5;5;5;
-````
+```
+
 > Note: In real case the distance and status array should be 64 elements long, but for the sake of example, we have shortened it to 10 elements.
+
 
 ### Sensor data 2 for mmWave sensor
 It includes the following information:
