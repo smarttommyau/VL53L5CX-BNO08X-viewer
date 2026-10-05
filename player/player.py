@@ -174,7 +174,8 @@ class RecordedPlayer:
             sensor.label_handle = server.scene.add_label(
                 f"{sensor.hierarchy_path}/label",
                 text=label_text,
-                position=(0.0, -0.015, 0.025),
+                position=(0.0, 0.0, -0.08),
+                anchor="bottom-center"
             )
 
             # Zone rays (only for VL53)
