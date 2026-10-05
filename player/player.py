@@ -24,6 +24,7 @@ from viewer.sensor_manager import SensorManager
 
 logger = logging.getLogger("vl53l5cx_viewer.player")
 
+MMWAVE_PATTERN = re.compile(r"\(([-0-9.]+);([-0-9.]+);([-0-9.]+)\)")
 
 def load_recording(export_dir: Path) -> list[dict]:
     """Parse sensors_meta_data.txt and CSV files from exported directory."""
@@ -65,15 +66,11 @@ def load_recording(export_dir: Path) -> list[dict]:
                         if len(row) >= 2:
                             ts = int(row[0])
                             dp_str = row[1]
-                            matches = re.findall(
-                                r"\(([-0-9.]+);([-0-9.]+);([-0-9.]+)\)", dp_str
-                            )
+                            matches = MMWAVE_PATTERN.findall(dp_str)
                             if matches:
                                 pts = np.array(
-                                    [
-                                        [float(m[0]), float(m[1]), float(m[2])]
-                                        for m in matches
-                                    ],
+                                    matches
+                                    ,
                                     dtype=np.float32,
                                 )
                             else:
@@ -83,12 +80,8 @@ def load_recording(export_dir: Path) -> list[dict]:
                     for row in reader:
                         if len(row) >= 3:
                             ts = int(row[0])
-                            dists = np.array(
-                                [float(x) for x in row[1].split(";")], dtype=np.float32
-                            )
-                            stats = np.array(
-                                [int(x) for x in row[2].split(";")], dtype=np.uint8
-                            )
+                            dists = np.fromstring(row[1], sep=";", dtype=np.float32)
+                            stats = np.fromstring(row[2], sep=";", dtype=np.uint8)
                             packets.append((ts, dists, stats))
 
         sensors_info.append({
