@@ -749,7 +749,26 @@ class VL53L5CXViewer:
 
 def parse_args():
     """Parse command line arguments supporting multiple devices (--deviceX, --portX, --IPX, --CFG_portX, --DATA_portX, --ConfigX, --sensor-countX)."""
-    parser = argparse.ArgumentParser(description="VL53L5CX and mmWave Point Cloud Viewer")
+    parser = argparse.ArgumentParser(
+        description="VL53L5CX and mmWave Point Cloud Viewer",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Device syntax:\n"
+            "  Base aliases apply to device 1: --device, --port, --IP, --CFG_port, --DATA_port, --Config, --sensor-count\n"
+            "  Indexed forms configure additional devices: --deviceX, --portX, --IPX, --CFG_portX, --DATA_portX, --ConfigX, --sensor-countX\n\n"
+            "Examples:\n"
+            "  python -m viewer --device1 port --port1 /dev/ttyACM0 --sensor-count1 2\n"
+            "  python -m viewer --device1 wifi --IP1 192.168.1.100 --sensor-count1 1\n"
+            "  python -m viewer --device1 mmwave --CFG_port1 /dev/ttyUSB0 --DATA_port1 /dev/ttyUSB1 --Config1 sensor_profile/iwr6843AOP_example.cfg\n"
+        ),
+    )
+
+    parser.add_argument(
+        "--device",
+        dest="device_alias",
+        default=None,
+        help="Fallback device type for device 1 (port, wifi, or mmwave)",
+    )
 
     parser.add_argument(
         "--port",
@@ -785,6 +804,13 @@ def parse_args():
         dest="cfg_file_alias",
         default="sensor_profile/iwr6843AOP_example.cfg",
         help="Fallback profile config file for mmWave device 1",
+    )
+    parser.add_argument(
+        "--sensor-count",
+        dest="sensor_count_alias",
+        type=int,
+        default=None,
+        help="Fallback sensor count for device 1",
     )
     parser.add_argument(
         "--baud", "-b", type=int, default=115200, help="Baud rate (default: 115200)"
@@ -926,23 +952,38 @@ def parse_args():
                 "device": "wifi",
                 "ip": args.ip_alias,
                 "telnet_port": 2340,
-                "sensor_count": 1,
+                "sensor_count": args.sensor_count_alias or 1,
             }
         else:
+            device_type = (args.device_alias or "port").lower()
             dev1_port = args.port_alias if args.port_alias is not None else "/dev/cu.usbserial-0001"
             devices_config[1] = {
-                "device": "port",
+                "device": device_type,
                 "port": dev1_port,
                 "ip": "192.168.1.100",
                 "telnet_port": 2340,
-                "sensor_count": 1,
+                "sensor_count": args.sensor_count_alias or 1,
+                "cfg_port": args.cfg_port_alias,
+                "data_port": args.data_port_alias,
+                "cfg_file": args.cfg_file_alias,
             }
+            if device_type == "wifi":
+                devices_config[1]["ip"] = args.ip_alias or devices_config[1]["ip"]
+            elif device_type == "mmwave":
+                devices_config[1]["cfg_port"] = args.cfg_port_alias
+                devices_config[1]["data_port"] = args.data_port_alias
+                devices_config[1]["cfg_file"] = args.cfg_file_alias
     elif args.ip_alias is not None and 1 in devices_config:
         devices_config[1]["ip"] = args.ip_alias
         devices_config[1]["device"] = "wifi"
+    elif args.device_alias is not None and 1 in devices_config:
+        devices_config[1]["device"] = args.device_alias.lower()
     elif args.port_alias is not None and 1 in devices_config:
         if "--port1" not in " ".join(sys.argv):
             devices_config[1]["port"] = args.port_alias
+
+    if args.sensor_count_alias is not None and 1 in devices_config:
+        devices_config[1]["sensor_count"] = args.sensor_count_alias
 
     return args, devices_config
 

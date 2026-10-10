@@ -175,3 +175,15 @@ class TestArgumentParsing:
         assert dev_cfg[2]["device"] == "port"
         assert dev_cfg[2]["port"] == "/dev/ttyACM1"
         assert dev_cfg[2]["sensor_count"] == 2
+
+    def test_parse_args_help_includes_device_syntax(self, monkeypatch, capsys):
+        """Should print help that documents base and indexed device arguments."""
+        monkeypatch.setattr(sys, "argv", ["viewer", "--help"])
+
+        with pytest.raises(SystemExit):
+            parse_args()
+
+        help_output = capsys.readouterr().out
+        assert "--device" in help_output
+        assert "--deviceX" in help_output
+        assert "--sensor-count" in help_output
