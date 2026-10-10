@@ -26,6 +26,7 @@ logger = logging.getLogger("vl53l5cx_viewer.player")
 
 MMWAVE_PATTERN = re.compile(r"\(([-0-9.]+);([-0-9.]+);([-0-9.]+)\)")
 
+
 def load_recording(export_dir: Path) -> list[dict]:
     """Parse sensors_meta_data.txt and CSV files from exported directory."""
     meta_filepath = export_dir / "sensors_meta_data.txt"
@@ -68,14 +69,21 @@ def load_recording(export_dir: Path) -> list[dict]:
                             dp_str = row[1]
                             matches = MMWAVE_PATTERN.findall(dp_str)
                             if matches:
-                                pts = np.array(
-                                    matches
-                                    ,
-                                    dtype=np.float32,
-                                )
+                                pts = np.array(matches, dtype=np.float32)
                             else:
                                 pts = np.empty((0, 3), dtype=np.float32)
-                            packets.append((ts, pts))
+
+                            dop = (
+                                np.fromstring(row[2], sep=";", dtype=np.float32)
+                                if len(row) >= 3 and row[2]
+                                else np.zeros((len(pts),), dtype=np.float32)
+                            )
+                            inten = (
+                                np.fromstring(row[3], sep=";", dtype=np.float32)
+                                if len(row) >= 4 and row[3]
+                                else np.full((len(pts),), 20.0, dtype=np.float32)
+                            )
+                            packets.append((ts, pts, dop, inten))
                 else:
                     for row in reader:
                         if len(row) >= 3:
@@ -168,7 +176,7 @@ class RecordedPlayer:
                 f"{sensor.hierarchy_path}/label",
                 text=label_text,
                 position=(0.0, 0.0, -0.08),
-                anchor="bottom-center"
+                anchor="bottom-center",
             )
 
             # Zone rays (only for VL53)
@@ -217,7 +225,6 @@ class RecordedPlayer:
             @self.loop_cb.on_update
             def _on_loop_change(e):
                 self.loop_playback = self.loop_cb.value
-
 
         with server.gui.add_folder("Sensors Info"):
             for sensor in self.sensor_manager.get_all_sensors():
@@ -294,8 +301,11 @@ class RecordedPlayer:
                     sensor = self.sensor_manager.get_sensor(dev_name)
                     if sensor:
                         if isinstance(sensor, IWR6843AOPEVMSensor) or getattr(sensor, "deviceType", "").lower() == "mmwave":
-                            _, points_3d = closest_pkt
-                            sensor.update_data(points_3d=points_3d)
+                            ts = closest_pkt[0]
+                            points_3d = closest_pkt[1]
+                            dop = closest_pkt[2] if len(closest_pkt) > 2 else None
+                            inten = closest_pkt[3] if len(closest_pkt) > 3 else None
+                            sensor.update_data(points_3d=points_3d, doppler=dop, intensity=inten)
                         else:
                             _, distances, status = closest_pkt
                             sensor.update_data(distances=distances, status=status)

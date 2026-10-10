@@ -54,6 +54,8 @@ class IWR6843AOPEVMSensor:
         self.points_3d: Optional[np.ndarray] = None  # N x 3 numpy array of (X, Y, Z) in meters
         self.distances: Optional[np.ndarray] = None  # Range values in mm
         self.status: Optional[np.ndarray] = None
+        self.doppler: Optional[np.ndarray] = None  # Doppler velocity in m/s
+        self.intensity: Optional[np.ndarray] = None  # SNR / intensity in dB
         self.temporal_filter = TemporalFilter()
 
         # Data FPS tracking
@@ -124,13 +126,28 @@ class IWR6843AOPEVMSensor:
         points_3d: np.ndarray,
         distances: Optional[np.ndarray] = None,
         status: Optional[np.ndarray] = None,
+        doppler: Optional[np.ndarray] = None,
+        intensity: Optional[np.ndarray] = None,
     ):
-        """Update 3D point cloud and status data for mmWave sensor."""
-        self.points_3d = points_3d.copy() if points_3d is not None else np.empty((0, 3), dtype=np.float32)
+        """Update 3D point cloud, doppler, and intensity data for mmWave sensor."""
+        self.points_3d = (
+            points_3d.copy() if points_3d is not None else np.empty((0, 3), dtype=np.float32)
+        )
+        n_pts = len(self.points_3d)
+
+        if doppler is not None and len(doppler) == n_pts:
+            self.doppler = doppler.copy()
+        else:
+            self.doppler = np.zeros((n_pts,), dtype=np.float32)
+
+        if intensity is not None and len(intensity) == n_pts:
+            self.intensity = intensity.copy()
+        else:
+            self.intensity = np.full((n_pts,), 20.0, dtype=np.float32)
 
         if distances is not None:
             self.distances = distances.copy()
-        elif len(self.points_3d) > 0:
+        elif n_pts > 0:
             # Calculate Euclidean distance in mm
             self.distances = np.linalg.norm(self.points_3d, axis=1) * 1000.0
         else:
@@ -139,7 +156,7 @@ class IWR6843AOPEVMSensor:
         if status is not None:
             self.status = status.copy()
         else:
-            self.status = np.full(len(self.points_3d), 5, dtype=np.uint8)
+            self.status = np.full(n_pts, 5, dtype=np.uint8)
 
         self.last_seen = time.time()
 
@@ -159,7 +176,6 @@ class IWR6843AOPEVMSensor:
         if self.points_3d is None or len(self.points_3d) == 0:
             return np.empty((0, 3), dtype=np.float32), np.empty((0, 3), dtype=np.uint8)
 
-        # Solid bright red for mmWave point cloud
         colors = np.tile(
             np.array([255, 0, 0], dtype=np.uint8), (len(self.points_3d), 1)
         )

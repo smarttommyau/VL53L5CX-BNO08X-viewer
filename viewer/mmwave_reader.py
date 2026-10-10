@@ -20,7 +20,7 @@ class MMWaveReader:
     """Communicates with TI IWR6843AOPEVM mmWave sensor over dual serial ports.
 
     - CFG_port (115200 baud): Sends CLI configuration profile commands sequentially, waiting for Done / Skipped response.
-    - DATA_port (921600 baud): Receives binary payload data frames containing 3D point cloud measurements.
+    - DATA_port (921600 baud): Receives binary payload data frames containing 3D point cloud, doppler, and intensity measurements.
     """
 
     def __init__(
@@ -48,8 +48,10 @@ class MMWaveReader:
         self.points_3d = np.empty((0, 3), dtype=np.float32)
         self.distances = np.empty((0,), dtype=np.float32)
         self.status = np.empty((0,), dtype=np.uint8)
+        self.doppler = np.empty((0,), dtype=np.float32)
+        self.intensity = np.empty((0,), dtype=np.float32)
         self._packets_queue: list[
-            tuple[str, np.ndarray, np.ndarray, np.ndarray, Optional[int]]
+            tuple[str, np.ndarray, np.ndarray, np.ndarray, Optional[int], np.ndarray, np.ndarray]
         ] = []
         self._data_lock = threading.Lock()
 
@@ -98,11 +100,11 @@ class MMWaveReader:
             prompt_line = (
                 self.cfg_serial.readline().decode("utf-8", errors="ignore").strip()
             )
-            # if prompt_line:
-                # logger.info("CFG_port prompt: %s", prompt_line)
-    
+            if prompt_line:
+                logger.info("CFG_port prompt: %s", prompt_line)
+
         for idx, line in enumerate(lines):
-            # logger.info("CFG_port [%d/%d] sending: %s", idx + 1, len(lines), line)
+            logger.info("CFG_port [%d/%d] sending: %s", idx + 1, len(lines), line)
 
             # Reset input buffer before sending command to ignore stale echos
             self.cfg_serial.reset_input_buffer()
@@ -124,7 +126,7 @@ class MMWaveReader:
                         if resp_line == line or resp_line == line + "\r":
                             continue
 
-                        # logger.info("CFG_port response for [%s]: %s", line, resp_line)
+                        logger.info("CFG_port response for [%s]: %s", line, resp_line)
 
                         if "Done" in resp_line or "Skipped" in resp_line:
                             done_received = True
@@ -214,7 +216,7 @@ class MMWaveReader:
         """Get pending packet tuples received since last call.
 
         Returns:
-            List of (deviceName, points_3d, distances_mm, status_array, None)
+            List of (deviceName, points_3d, distances_mm, status_array, None, doppler_arr, intensity_arr)
         """
         with self._data_lock:
             packets = self._packets_queue[:]
@@ -291,6 +293,8 @@ class MMWaveReader:
                             # Parse TLVs
                             tlv_offset = 40
                             points_list = []
+                            doppler_list = []
+                            intensity_list = []
 
                             for t_idx in range(min(numTLVs, 50)):
                                 if tlv_offset + 8 > len(packet):
@@ -323,8 +327,8 @@ class MMWaveReader:
                                                 "<ffff",
                                                 tlv_payload[i * 16 : (i + 1) * 16],
                                             )
-                                            # Convert TI radar coords (X right, Y depth, Z height) -> sensor local frame (X right, Y down, Z forward)
                                             points_list.append([pt_x, -pt_z, pt_y])
+                                            doppler_list.append(dop)
                                     elif len(tlv_payload) >= 4:
                                         # Legacy SDK 1.x Q-format structure (descriptor + int16 points)
                                         num_obj, q_fmt = struct.unpack(
@@ -359,23 +363,40 @@ class MMWaveReader:
                                                 pt_z = float(z_raw) / q_scale
 
                                                 points_list.append([pt_x, -pt_z, pt_y])
+                                                doppler_list.append(float(d_idx))
+                                                intensity_list.append(float(peak))
 
-                            # if points_list:
-                                # logger.info(
-                                #     "mmWave parsed %d 3D points in frame #%d",
-                                #     len(points_list),
-                                #     frameNumber,
-                                # )
+                                elif tlv_type == 7:  # MMWDEMO_OUTPUT_MSG_DETECTED_POINTS_SIDE_INFO
+                                    if len(tlv_payload) % 4 == 0 and len(tlv_payload) > 0:
+                                        num_pts = len(tlv_payload) // 4
+                                        for i in range(num_pts):
+                                            snr, noise = struct.unpack(
+                                                "<HH", tlv_payload[i * 4 : (i + 1) * 4]
+                                            )
+                                            intensity_list.append(float(snr) * 0.1)
 
                             points_3d = (
                                 np.array(points_list, dtype=np.float32)
                                 if points_list
                                 else np.empty((0, 3), dtype=np.float32)
                             )
+                            n_pts = len(points_3d)
 
-                            if len(points_3d) > 0:
+                            doppler_arr = (
+                                np.array(doppler_list, dtype=np.float32)
+                                if len(doppler_list) == n_pts
+                                else np.zeros((n_pts,), dtype=np.float32)
+                            )
+
+                            intensity_arr = (
+                                np.array(intensity_list, dtype=np.float32)
+                                if len(intensity_list) == n_pts
+                                else np.full((n_pts,), 20.0, dtype=np.float32)
+                            )
+
+                            if n_pts > 0:
                                 dists_mm = np.linalg.norm(points_3d, axis=1) * 1000.0
-                                stats_arr = np.full(len(points_3d), 5, dtype=np.uint8)
+                                stats_arr = np.full(n_pts, 5, dtype=np.uint8)
                             else:
                                 dists_mm = np.empty((0,), dtype=np.float32)
                                 stats_arr = np.empty((0,), dtype=np.uint8)
@@ -384,6 +405,8 @@ class MMWaveReader:
                                 self.points_3d = points_3d
                                 self.distances = dists_mm
                                 self.status = stats_arr
+                                self.doppler = doppler_arr
+                                self.intensity = intensity_arr
                                 self._packets_queue.append(
                                     (
                                         self.deviceName,
@@ -391,6 +414,8 @@ class MMWaveReader:
                                         dists_mm,
                                         stats_arr,
                                         None,
+                                        doppler_arr,
+                                        intensity_arr,
                                     )
                                 )
 

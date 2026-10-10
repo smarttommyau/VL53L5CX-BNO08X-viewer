@@ -553,12 +553,24 @@ class VL53L5CXViewer:
             packets = reader.get_pending_packets()
             for packet in packets:
                 if isinstance(reader, MMWaveReader):
-                    dev_name, points_3d, dists_mm, status_arr, _ = packet
+                    dev_name, points_3d, dists_mm, status_arr, sda, doppler_arr, intensity_arr = packet
                     sensor, newly_assigned = self.sensor_manager.process_packet(
                         dev_name, points_3d
                     )
+                    sensor.update_data(
+                        points_3d=points_3d,
+                        distances=dists_mm,
+                        status=status_arr,
+                        doppler=doppler_arr,
+                        intensity=intensity_arr,
+                    )
                     if self.exporter.is_recording:
-                        self.exporter.record_packet(sensor.id, points_3d)
+                        self.exporter.record_packet(
+                            sensor.id,
+                            data1=points_3d,
+                            doppler=doppler_arr,
+                            intensity=intensity_arr,
+                        )
                 else:  # ToF (SerialReader or NetworkReader)
                     dev_name, distances, status, sda = packet
                     sensor, newly_assigned = self.sensor_manager.process_packet(

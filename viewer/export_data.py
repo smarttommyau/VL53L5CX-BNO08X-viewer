@@ -72,6 +72,8 @@ class DataExporter:
         data1: np.ndarray,
         distances: Optional[np.ndarray] = None,
         status: Optional[np.ndarray] = None,
+        doppler: Optional[np.ndarray] = None,
+        intensity: Optional[np.ndarray] = None,
     ):
         """Record a single packet for a sensor if recording is active."""
         if not self.is_recording or sensor_id not in self.records:
@@ -81,7 +83,9 @@ class DataExporter:
         rec = self.records[sensor_id]
 
         if rec["conn_type"] == "mmwave":
-            rec["packets"].append((timestamp_ms, data1.copy()))
+            dop_arr = doppler.copy() if doppler is not None else np.zeros(len(data1), dtype=np.float32)
+            inten_arr = intensity.copy() if intensity is not None else np.full(len(data1), 20.0, dtype=np.float32)
+            rec["packets"].append((timestamp_ms, data1.copy(), dop_arr, inten_arr))
         else:
             rec["packets"].append(
                 (timestamp_ms, data1.copy(), distances.copy() if distances is not None else status.copy())
@@ -109,13 +113,13 @@ class DataExporter:
             conn_type = data["conn_type"]
             pos = data["position"]
             wxyz = data["wxyz"]
-            sanitized_device = device_name.replace("/", "-").replace(":", "-")
 
-            # Filename formatting according to export_data/README.md
+            # Filename formatting according to export_data/README.md (name.type.csv)
+            sanitized_device = device_name.replace("/", "-").replace(":", "-")
             if conn_type.lower() == "mmwave":
-                csv_filename = f"{sanitized_device}_data.mmWave.csv"
+                csv_filename = f"{sanitized_device}_{sda}.mmWave.csv"
             else:
-                csv_filename = f"{sanitized_device}_{sda}_data.VL53L5CX.{sensor_id}.csv"
+                csv_filename = f"{sanitized_device}_{sda}.VL53L5CX.csv"
 
             csv_filepath = export_dir / csv_filename
             rel_csv_path = f"./{self.timestamp_str}/{csv_filename}"
@@ -124,15 +128,17 @@ class DataExporter:
             with open(csv_filepath, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 if conn_type.lower() == "mmwave":
-                    writer.writerow(["Timestamp", "DataPoints"])
-                    for ts_ms, pts in data["packets"]:
+                    writer.writerow(["Timestamp", "DataPoints", "Doppler", "Intensity"])
+                    for ts_ms, pts, dop, inten in data["packets"]:
                         dp_str = "".join(f"({p[0]:.2f};{p[1]:.2f};{p[2]:.2f})" for p in pts)
-                        writer.writerow([ts_ms, dp_str])
+                        dop_str = ";".join(f"{d:.2f}" for d in dop)
+                        inten_str = ";".join(f"{i:.2f}" for i in inten)
+                        writer.writerow([ts_ms, dp_str, dop_str, inten_str])
                 else:
                     writer.writerow(["Timestamp", "Distance", "Status"])
                     for ts_ms, dists, stats in data["packets"]:
-                        dist_str = ";".join(dists.astype(str))
-                        stat_str = ";".join(stats.astype(str))
+                        dist_str = ";".join(str(int(d)) for d in dists)
+                        stat_str = ";".join(str(int(s)) for s in stats)
                         writer.writerow([ts_ms, dist_str, stat_str])
 
             # Metadata format (quaternion order x, y, z, w)
